@@ -1499,11 +1499,16 @@ void World::draw ( math::matrix_4x4 const& model_view
     water_shader.uniform("model_view", model_view);
     water_shader.uniform("projection", projection);
 
-    // use some default colors when not using light dbc data
-    math::vector_4d ocean_color_light(use_dbc_lighting_data ? skies->color_set[OCEAN_COLOR_LIGHT] : math::vector_3d(0.2f, 0.3f, 0.35f), skies->ocean_shallow_alpha());
-    math::vector_4d ocean_color_dark (use_dbc_lighting_data ? skies->color_set[OCEAN_COLOR_DARK]  : math::vector_3d(0.0f, 0.1f, 0.2f),  skies->ocean_deep_alpha());
-    math::vector_4d river_color_light(use_dbc_lighting_data ? skies->color_set[RIVER_COLOR_LIGHT] : math::vector_3d(0.3f, 0.3f, 0.4f),  skies->river_shallow_alpha());
-    math::vector_4d river_color_dark (use_dbc_lighting_data ? skies->color_set[RIVER_COLOR_DARK]  : math::vector_3d(0.2f, 0.2f, 0.3f),  skies->river_deep_alpha());
+    // 1.12.1's light data has no usable ocean/river colour: the LightIntBand
+    // slots noggit reads resolve to dark, desaturated tints (measured 0.02-0.35
+    // and never blue, unlike the wotlk bands those slots are meant for). The
+    // shader adds the tint to the liquid texture, which made the sea render dark
+    // and flat, so use the fixed water palette instead. The shallow/deep alphas
+    // do come from the vanilla LightParams data, which is sane.
+    math::vector_4d ocean_color_light(math::vector_3d(0.2f, 0.3f, 0.35f), skies->ocean_shallow_alpha());
+    math::vector_4d ocean_color_dark (math::vector_3d(0.0f, 0.1f, 0.2f),  skies->ocean_deep_alpha());
+    math::vector_4d river_color_light(math::vector_3d(0.3f, 0.3f, 0.4f),  skies->river_shallow_alpha());
+    math::vector_4d river_color_dark (math::vector_3d(0.2f, 0.2f, 0.3f),  skies->river_deep_alpha());
 
     water_shader.uniform("ocean_color_light", ocean_color_light);
     water_shader.uniform("ocean_color_dark", ocean_color_dark);

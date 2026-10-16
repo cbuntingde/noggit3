@@ -13,9 +13,16 @@
 
 namespace
 {
+  // 1.12.1 MCLQ water carries no texture coordinates, so they are derived from
+  // the vertex index. Upstream sampled them as (index / 4), i.e. a texture
+  // repeat every two chunk tiles; the wmo liquid path (wmo_liquid.cpp) uses the
+  // raw tile index instead, one repeat per tile at the same 4.17 unit vertex
+  // spacing. The finer mapping matches that convention: the coarse one
+  // stretched a single texture across four tiles and read as a flat,
+  // featureless sheet at distance.
   inline math::vector_2d default_uv(int px, int pz)
   {
-    return {static_cast<float>(px) / 4.f, static_cast<float>(pz) / 4.f};
+    return {static_cast<float>(px), static_cast<float>(pz)};
   }
 }
 
