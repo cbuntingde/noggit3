@@ -41,7 +41,6 @@ namespace noggit
       util::file_line_edit* projectPathField;
       util::file_line_edit* importPathField;
       util::file_line_edit* wmvLogPathField;
-      util::file_line_edit* mclq_liquids_export_path;
       QComboBox* _client_version_combo;
       QDoubleSpinBox* _fov;
       QDoubleSpinBox* _view_distance;
@@ -58,7 +57,6 @@ namespace noggit
 
       QCheckBox* _additional_file_loading_log;
 
-      QCheckBox* _use_mclq_liquids_export;
       QCheckBox* _only_one_model_box;
 
 #ifdef NOGGIT_HAS_SCRIPTING

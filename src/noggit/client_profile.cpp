@@ -82,11 +82,23 @@ namespace noggit
     {
       if (auto const stored = from_string (NoggitSettings.value (client_version_key).toString()))
       {
+        // non-vanilla profiles are no longer supported; a stale setting
+        // must not activate the dormant wotlk code paths
+        if (*stored != client_version::vanilla_1_12_1)
+        {
+          return client_version::vanilla_1_12_1;
+        }
+
         return *stored;
       }
 
       if (auto const detected = detect_from_game_path (NoggitSettings.value (game_path_key).toString()))
       {
+        if (*detected != client_version::vanilla_1_12_1)
+        {
+          return client_version::vanilla_1_12_1;
+        }
+
         return *detected;
       }
 
@@ -95,6 +107,14 @@ namespace noggit
 
     void set_current (client_version version)
     {
+      if (version != client_version::vanilla_1_12_1)
+      {
+        LogError << "Client profile \"" << to_string (version).toStdString()
+                 << "\" is no longer supported (WoW 1.12.1 only), using vanilla_1_12_1."
+                 << std::endl;
+        version = client_version::vanilla_1_12_1;
+      }
+
       NoggitSettings.set_value (client_version_key, to_string (version));
     }
 
@@ -138,29 +158,12 @@ namespace noggit
              };
     }
 
-    bool default_mclq_export (client_version version)
-    {
-      return version == client_version::vanilla_1_12_1;
-    }
-
     bool default_uid_startup_check (client_version version)
     {
       // the scan reads every existing tile of a map and blocks the editor
       // for tens of seconds; for vanilla the stored uid.ini value is
       // enough by default, the permission prompt covers first-time maps
       return version == client_version::wotlk_3_3_5a;
-    }
-
-    QString mclq_export_path()
-    {
-      QString const path (NoggitSettings.value ("project/mclq_liquids_path").toString());
-
-      if (!path.isEmpty())
-      {
-        return path;
-      }
-
-      return QString::fromStdString (NoggitSettings.project_path());
     }
   }
 }

@@ -46,7 +46,26 @@ liquid_layer::liquid_layer(math::vector_3d const& base, mclq& liquid, int liquid
   {
     for (int x = 0; x < 8; ++x)
     {
-      misc::set_bit(_subchunks, x, z, !liquid.tiles[z * 8 + x].dont_render);
+      mclq_tile const& tile = liquid.tiles[z * 8 + x];
+
+      bool const has_liquid (!tile.dont_render);
+
+      misc::set_bit(_subchunks, x, z, has_liquid);
+
+      // the type of the last visible tile wins, like in
+      // liquid_chunk::from_mclq; keeping it verbatim is the only way the
+      // mclq tile type survives the liquid_id round trip
+      if (has_liquid)
+      {
+        _mclq_liquid_type = tile.liquid_type;
+      }
+
+      // preserve the per tile bits the editor does not model
+      misc::set_bit(_mclq_covered, x, z, has_liquid);
+      misc::set_bit(_mclq_fishable, x, z, tile.fishable);
+      misc::set_bit(_mclq_fatigue, x, z, tile.fatigue);
+      misc::set_bit(_mclq_flag_0x10, x, z, tile.flag_0x10);
+      misc::set_bit(_mclq_flag_0x20, x, z, tile.flag_0x20);
     }
   }
 
@@ -67,6 +86,9 @@ liquid_layer::liquid_layer(math::vector_3d const& base, mclq& liquid, int liquid
       {
         lv.depth = static_cast<float>(v.water.depth) / 255.f;
         lv.uv = default_uv(x, z);
+
+        // depth bytes only exist in the water layout of the union
+        _mclq_depth[z * 9 + x] = v.water.depth;
       }
 
       // keep the raw height: vanilla files use FLT_MAX as "no liquid here"
@@ -80,7 +102,23 @@ liquid_layer::liquid_layer(math::vector_3d const& base, mclq& liquid, int liquid
     }
   }
 
-  update_min_max();
+  for (int i = 0; i < 9 * 9; ++i)
+  {
+    _mclq_flow_0[i] = liquid.vertices[i].water.flow_0_pct;
+    _mclq_flow_1[i] = liquid.vertices[i].water.flow_1_pct;
+  }
+
+  _mclq_n_flowvs = liquid.n_flowvs;
+  _mclq_flowvs[0] = liquid.flowvs[0];
+  _mclq_flowvs[1] = liquid.flowvs[1];
+
+  _from_mclq = true;
+
+  // do not recompute the heights: vanilla's stored min/max do not always
+  // match a recomputation from the covered vertices, and an untouched
+  // chunk must save back byte-identically; edits go through update_min_max
+  _center = math::vector_3d(pos.x + CHUNKSIZE * 0.5f, (_maximum + _minimum) * 0.5f, pos.z + CHUNKSIZE * 0.5f);
+  _fatigue_enabled = check_fatigue();
 }
 
 liquid_layer::liquid_layer(MPQFile &f, std::size_t base_pos, math::vector_3d const& base, MH2O_Information const& info, std::uint64_t infomask)
@@ -174,6 +212,18 @@ liquid_layer::liquid_layer(liquid_layer&& other)
   , _maximum(other._maximum)
   , _center(other._center)
   , _subchunks(other._subchunks)
+  , _from_mclq(other._from_mclq)
+  , _mclq_covered(other._mclq_covered)
+  , _mclq_fishable(other._mclq_fishable)
+  , _mclq_fatigue(other._mclq_fatigue)
+  , _mclq_flag_0x10(other._mclq_flag_0x10)
+  , _mclq_flag_0x20(other._mclq_flag_0x20)
+  , _mclq_flow_0(other._mclq_flow_0)
+  , _mclq_flow_1(other._mclq_flow_1)
+  , _mclq_depth(other._mclq_depth)
+  , _render_zeroed_depth(other._render_zeroed_depth)
+  , _mclq_n_flowvs(other._mclq_n_flowvs)
+  , _mclq_flowvs(other._mclq_flowvs)
   , _vertices(other._vertices)
   , _indices_by_lod(other._indices_by_lod)
   , _indices_count_by_lod(other._indices_count_by_lod)
@@ -191,6 +241,18 @@ liquid_layer::liquid_layer(liquid_layer const& other)
   , _maximum(other._maximum)
   , _center(other._center)
   , _subchunks(other._subchunks)
+  , _from_mclq(other._from_mclq)
+  , _mclq_covered(other._mclq_covered)
+  , _mclq_fishable(other._mclq_fishable)
+  , _mclq_fatigue(other._mclq_fatigue)
+  , _mclq_flag_0x10(other._mclq_flag_0x10)
+  , _mclq_flag_0x20(other._mclq_flag_0x20)
+  , _mclq_flow_0(other._mclq_flow_0)
+  , _mclq_flow_1(other._mclq_flow_1)
+  , _mclq_depth(other._mclq_depth)
+  , _render_zeroed_depth(other._render_zeroed_depth)
+  , _mclq_n_flowvs(other._mclq_n_flowvs)
+  , _mclq_flowvs(other._mclq_flowvs)
   , _vertices(other._vertices)
   , _indices_by_lod(other._indices_by_lod)
   , _indices_count_by_lod(other._indices_count_by_lod)
@@ -207,6 +269,18 @@ liquid_layer& liquid_layer::operator= (liquid_layer&& other)
   std::swap(_maximum, other._maximum);
   std::swap(_center, other._center);
   std::swap(_subchunks, other._subchunks);
+  std::swap(_from_mclq, other._from_mclq);
+  std::swap(_mclq_covered, other._mclq_covered);
+  std::swap(_mclq_fishable, other._mclq_fishable);
+  std::swap(_mclq_fatigue, other._mclq_fatigue);
+  std::swap(_mclq_flag_0x10, other._mclq_flag_0x10);
+  std::swap(_mclq_flag_0x20, other._mclq_flag_0x20);
+  std::swap(_mclq_flow_0, other._mclq_flow_0);
+  std::swap(_mclq_flow_1, other._mclq_flow_1);
+  std::swap(_mclq_depth, other._mclq_depth);
+  std::swap(_render_zeroed_depth, other._render_zeroed_depth);
+  std::swap(_mclq_n_flowvs, other._mclq_n_flowvs);
+  std::swap(_mclq_flowvs, other._mclq_flowvs);
   std::swap(_vertices, other._vertices);
   std::swap(_indices_by_lod, other._indices_by_lod);
   std::swap(_indices_count_by_lod, other._indices_count_by_lod);
@@ -228,6 +302,18 @@ liquid_layer& liquid_layer::operator=(liquid_layer const& other)
   _maximum = other._maximum;
   _center = other._center;
   _subchunks = other._subchunks;
+  _from_mclq = other._from_mclq;
+  _mclq_covered = other._mclq_covered;
+  _mclq_fishable = other._mclq_fishable;
+  _mclq_fatigue = other._mclq_fatigue;
+  _mclq_flag_0x10 = other._mclq_flag_0x10;
+  _mclq_flag_0x20 = other._mclq_flag_0x20;
+  _mclq_flow_0 = other._mclq_flow_0;
+  _mclq_flow_1 = other._mclq_flow_1;
+  _mclq_depth = other._mclq_depth;
+  _render_zeroed_depth = other._render_zeroed_depth;
+  _mclq_n_flowvs = other._mclq_n_flowvs;
+  _mclq_flowvs = other._mclq_flowvs;
   _vertices = other._vertices;
   _indices_by_lod = other._indices_by_lod;
   _indices_count_by_lod = other._indices_count_by_lod;
@@ -393,6 +479,38 @@ void liquid_layer::changeLiquidID(int id)
 {
   _liquid_id = id;
 
+  // vanilla (1.12.1) liquid ids that mclq data uses (see
+  // liquid_chunk::from_mclq): the wotlk-shaped accessors in DBC.h read the
+  // wrong columns from the vanilla LiquidType.dbc, so the lookup below ends
+  // up in the river default for every row; the ids are mapped explicitly
+  switch (id)
+  {
+  case 1: // river
+    _liquid_type = 0;
+    _liquid_vertex_format = 0;
+    _mclq_liquid_type = 4;
+    return;
+  case 2: // ocean
+    _liquid_type = 1;
+    // lvf 2 is only used for flat water at height 0
+    _liquid_vertex_format = misc::float_equals(_minimum, 0.f) && misc::float_equals(_maximum, 0.f) ? 2 : 0;
+    _mclq_liquid_type = 1;
+    return;
+  case 3: // magma
+  case 15: // green lava
+    _liquid_type = 2;
+    _liquid_vertex_format = 1;
+    _mclq_liquid_type = 6;
+    return;
+  case 4: // slime
+    _liquid_type = 3;
+    _liquid_vertex_format = 1;
+    _mclq_liquid_type = 3;
+    return;
+  default:
+    break;
+  }
+
   try
   {
     DBCFile::Record lLiquidTypeRow = gLiquidTypeDB.getByID(_liquid_id);
@@ -449,9 +567,8 @@ bool liquid_layer::check_fatigue() const
 
 mclq liquid_layer::to_mclq(MH2O_Attributes& attributes) const
 {
-  // value-initialized: flow percentages, n_flowvs and flowvs are not
-  // written below, without the {} they end up as stack garbage in the
-  // saved file and every save produces different bytes
+  // value-initialized: everything not explicitly written below must not end
+  // up as stack garbage in the saved file
   mclq mclq_data{};
 
   mclq_data.min_height = _minimum;
@@ -463,8 +580,22 @@ mclq liquid_layer::to_mclq(MH2O_Attributes& attributes) const
     {
       mclq_data.tiles[i].liquid_type = _mclq_liquid_type & 0x7;
       mclq_data.tiles[i].dont_render = 0;
-      mclq_data.tiles[i].fishable = (attributes.fishable >> i) & 1;
-      mclq_data.tiles[i].fatigue = (attributes.fatigue >> i) & 1;
+
+      if (_from_mclq && (_mclq_covered >> i) & 1)
+      {
+        // tiles that were already covered in the loaded file keep their
+        // attribute bits exactly as stored; vanilla marks far more tiles
+        // fishable/fatigue than recomputing them would
+        mclq_data.tiles[i].fishable = (_mclq_fishable >> i) & 1;
+        mclq_data.tiles[i].fatigue = (_mclq_fatigue >> i) & 1;
+        mclq_data.tiles[i].flag_0x10 = (_mclq_flag_0x10 >> i) & 1;
+        mclq_data.tiles[i].flag_0x20 = (_mclq_flag_0x20 >> i) & 1;
+      }
+      else
+      {
+        mclq_data.tiles[i].fishable = (attributes.fishable >> i) & 1;
+        mclq_data.tiles[i].fatigue = (attributes.fatigue >> i) & 1;
+      }
     }
     else
     {
@@ -484,18 +615,41 @@ mclq liquid_layer::to_mclq(MH2O_Attributes& attributes) const
     // load would clamp it further and every save would drift
     mclq_data.vertices[i].height = _vertices[i].position.y;
 
-    // magma and slime
-    if (_liquid_type == 2 || _liquid_type == 3)
+    // magma and slime, chosen by the original mclq type so the union bytes
+    // are interpreted the same way they were read
+    if (_mclq_liquid_type == 6 || _mclq_liquid_type == 3)
     {
       mclq_data.vertices[i].magma.x = static_cast<std::uint16_t>(std::lround(std::min(_vertices[i].uv.x * 255.f, 65535.f)));
       mclq_data.vertices[i].magma.y = static_cast<std::uint16_t>(std::lround(std::min(_vertices[i].uv.y * 255.f, 65535.f)));
     }
     else
     {
-      // round instead of truncate, otherwise the value ratchets down by
-      // one on every load/save (e.g. 201/255*255 truncates to 200)
-      mclq_data.vertices[i].water.depth = static_cast<std::uint8_t>(std::lround(std::clamp(_vertices[i].depth * 255.f, 0.f, 255.f)));
+      if (_from_mclq && _render_zeroed_depth[i] && _vertices[i].depth == 0.f)
+      {
+        // untouched vertex that the loader zeroed for rendering: save the
+        // raw byte back instead of the render hack's zero
+        mclq_data.vertices[i].water.depth = _mclq_depth[i];
+      }
+      else
+      {
+        // round instead of truncate, otherwise the value ratchets down by
+        // one on every load/save (e.g. 201/255*255 truncates to 200)
+        mclq_data.vertices[i].water.depth = static_cast<std::uint8_t>(std::lround(std::clamp(_vertices[i].depth * 255.f, 0.f, 255.f)));
+      }
+
+      if (_from_mclq)
+      {
+        mclq_data.vertices[i].water.flow_0_pct = _mclq_flow_0[i];
+        mclq_data.vertices[i].water.flow_1_pct = _mclq_flow_1[i];
+      }
     }
+  }
+
+  if (_from_mclq)
+  {
+    mclq_data.n_flowvs = _mclq_n_flowvs;
+    mclq_data.flowvs[0] = _mclq_flowvs[0];
+    mclq_data.flowvs[1] = _mclq_flowvs[1];
   }
 
   return mclq_data;
@@ -628,6 +782,7 @@ void liquid_layer::update_underground_vertices_depth(MapChunk* chunk)
       if (diff < 0.f)
       {
         _vertices[z * 9 + x].depth = 0.f;
+        _render_zeroed_depth[z * 9 + x] = 1;
       }
       else
       {
@@ -637,6 +792,10 @@ void liquid_layer::update_underground_vertices_depth(MapChunk* chunk)
           _vertices[z * 9 + x + 1].depth = 0.f;
           _vertices[(z + 1) * 9 + x].depth = 0.f;
           _vertices[(z + 1) * 9 + (x + 1)].depth = 0.f;
+          _render_zeroed_depth[z * 9 + x] = 1;
+          _render_zeroed_depth[z * 9 + x + 1] = 1;
+          _render_zeroed_depth[(z + 1) * 9 + x] = 1;
+          _render_zeroed_depth[(z + 1) * 9 + (x + 1)] = 1;
         }
       }
     }

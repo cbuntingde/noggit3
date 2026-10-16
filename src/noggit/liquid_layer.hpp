@@ -141,6 +141,26 @@ private:
 
   std::uint64_t _subchunks;
 
+  // raw mclq fields that have no editor-side representation, kept so an
+  // untouched chunk is saved back byte-identically: vanilla data uses per
+  // vertex flow, per tile attribute bits and the flow volume list, all of
+  // which would otherwise be zeroed on save
+  bool _from_mclq = false;
+  std::uint64_t _mclq_covered = 0;      // tiles that had liquid in the file
+  std::uint64_t _mclq_fishable = 0;
+  std::uint64_t _mclq_fatigue = 0;
+  std::uint64_t _mclq_flag_0x10 = 0;
+  std::uint64_t _mclq_flag_0x20 = 0;
+  std::array<std::uint8_t, 9 * 9> _mclq_flow_0 = {};
+  std::array<std::uint8_t, 9 * 9> _mclq_flow_1 = {};
+  std::array<std::uint8_t, 9 * 9> _mclq_depth = {};
+  // vertices whose depth the tile loader zeroed for rendering (lods need
+  // below-terrain vertices to be transparent): an untouched vertex must
+  // save back its raw byte, not the render hack's zero
+  std::array<std::uint8_t, 9 * 9> _render_zeroed_depth = {};
+  std::uint32_t _mclq_n_flowvs = 0;
+  std::array<mclq_flowvs, 2> _mclq_flowvs = {};
+
   std::vector<liquid_vertex> _vertices;
 
   std::map<int, std::vector<liquid_indice>> _indices_by_lod;

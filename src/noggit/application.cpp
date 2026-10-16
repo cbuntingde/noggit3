@@ -290,12 +290,12 @@ Noggit::Noggit(int argc, char *argv[])
   NoggitSettings.set_value ("project/path", QString::fromStdString(project_path));
 
   // resolve the client profile; detection from the game folder's layout
-  // wins, else the stored value, else vanilla (the primary target)
+  // wins, else the stored value, else vanilla (the only supported target)
   if (auto const detected = noggit::client_profile::detect_from_game_path (path.absolutePath()))
   {
     noggit::client_profile::set_current (*detected);
     NOGGIT_LOG << "Client profile: "
-      << noggit::client_profile::to_string (*detected).toStdString()
+      << noggit::client_profile::to_string (noggit::client_profile::current()).toStdString()
       << " (detected from game path)" << std::endl;
   }
   else

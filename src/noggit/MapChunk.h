@@ -237,7 +237,6 @@ public:
            , std::map<std::string, int> &lTextures
            , std::vector<WMOInstance> &lObjectInstances
            , std::vector<ModelInstance>& lModelInstances
-           , bool use_mclq_liquids
            );
 
   // fix the gaps with the chunk to the left

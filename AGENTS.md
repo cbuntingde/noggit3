@@ -11,8 +11,8 @@ This fork (origin `github.com/cbuntingde/noggit3`, tracks `wowdev/noggit3`, bran
 | P0 | Qt/VS2022 toolchain, cmake build, runnable install dir | done |
 | P1 | Client profile: vanilla detection from Data layout, per-profile MPQ list, flat-layout path validation, "Client Version" setting, profile-driven MCLQ export default/path | done |
 | P2 | Vanilla ADT load/save audit + headless round-trip test + save tooling. Headline bug (opening a map "crashed"/froze) root-caused to a liquid texture-loop spin and fixed. | done |
-| P3 | MCLQ water completeness (tile flags, min/max, liquid bits on save, vanilla UI/render) | next |
-| P4 | Vanilla assets (DBC layouts, M2 v256, WMO v17/MLIQ) | planned |
+| P3 | MCLQ water completeness (tile flags, min/max, liquid bits on save, vanilla UI/render) | done |
+| P4 | Vanilla assets (DBC layouts, M2 v256, WMO v17/MLIQ) | next |
 | P5 | AI provider core (adapters + UI + mock tests) | planned |
 | P6 | AI generation/apply (map spec schema, FastNoise2, auto-backup) | planned |
 
@@ -22,6 +22,17 @@ This fork (origin `github.com/cbuntingde/noggit3`, tracks `wowdev/noggit3`, bran
 - **Fixes**: `liquid_render.cpp` vanilla branch resolves fixed texture sets per liquid id (still=`XTextures\river\lake_a.%d.blp`, ocean=`XTextures\ocean\ocean_h.%d.blp`, magma=`XTextures\lava\lava.%d.blp`, slime=`XTextures\slime\slime.%d.blp`; MCLQ ids 1/2/3/4/15 and WMO ids 13/14/15/19/20/21), and the enumeration loop now also breaks when `replace()` is a no-op. `MPQFile::exists("")` returns false. `AsyncLoader` catch-path now releases the failed object's queue slot (previously leaked → `wait_queue_empty()` at world unload/exit hung after any failed load — verified live: clean exit with ~40 failed M2 loads).
 - **Verification tooling** (all in `build/scratch/`, gitignored): `hang_probe.ps1` (per-thread CPU+RIP via dbghelp, no cdb available), `send_keys.ps1` (keybd_event driver), `click.ps1`, `gui_shot3.ps1` (window capture; note: the older `gui_shot2.ps1` ALT-tap activates the Qt menu bar and subsequent arrows navigate menus — don't combine it with synthetic input).
 - **Carryover**: sea surface renders very dark/flat at distance (P3 liquid render polish); location names resolve wrong (`Tirisfal Glades` while over Westfall — P4 AreaTable DBC); ~40 M2 doodad load failures per coast flight (M2 v256 — P4).
+
+### P3 findings (done 2026-10-16, verified on SoloCraft)
+
+- **MCLQ save is unconditional** — the `use_mclq_liquids_export` / `mclq_liquids_path` settings are gone (code, UI, settings.ini); vanilla save always writes MCLQ.
+- **Headline result: byte-identical round-trip.** Full Azeroth (687 tiles): **92,173 / 92,173 liquid chunks byte-identical** (92,186 layers), 0 diffs in size/min-max/heights/depth-flow bytes/tile bits/flow data/mcnk flags; census of the first save == census of the original (type1=5419715, type4=234937, type6=4183, type7=241069 tiles, 5580616 fishable, 4683878 fatigue, 3534 flow vertices, 5998 flow layers).
+- **Fixes that got it there** (all in `liquid_layer.{hpp,cpp}`, `MapChunk.cpp`):
+  - `changeLiquidID` hardcodes the vanilla liquid id ↔ mclq type pairing (1→river/mclq4, 2→ocean/mclq1, 3+15→magma/mclq6, 4→slime/mclq3) before the DBC fallback: the WotLK-shaped `DBC.h` accessors misread vanilla `LiquidType.dbc`, which made every layer save as "river".
+  - `liquid_layer` keeps the raw MCLQ fields the editor does not model (`_from_mclq`: per-tile covered/fishable/fatigue/flag_0x10/flag_0x20 masks, per-vertex depth + flow_0/flow_1 bytes, `n_flowvs`/`flowvs`) and `to_mclq` re-emits them for untouched data.
+  - Loaded `_minimum`/`_maximum` are kept verbatim (no recompute from vertices); MCNK flags are kept verbatim (vanilla sets e.g. `do_not_fix_alpha_map`, clearing it rewrote untouched chunks).
+  - The tile loader's render hack (`MapTile.cpp` → `update_underground_vertices_depth`) zeroes depth on below-terrain vertices for lod rendering; `to_mclq` restores the raw byte for vertices the hack zeroed that were not edited since (`_render_zeroed_depth` flag).
+- **Metrics**: `adt_roundtrip.cpp` now reports liquid fidelity (per-region byte compares, flag-bit histogram) and liquid census (tile type histogram, attribute counts); non-identical tiles keep `.orig/.first/saved` dumps for inspection.
 
 ## Build (Windows, this machine)
 
@@ -51,7 +62,7 @@ This fork (origin `github.com/cbuntingde/noggit3`, tracks `wowdev/noggit3`, bran
    - `Using flat vanilla data layout (no locale subdirectories).`
    - all archives opened, DBCs opened, GL context created, `Loading world "Azeroth"`.
    - Expected-on-vanilla noise until P4: `[Error] ... .m2 could not be loaded` (~40 per coast flight) and `Texture N has a lenght of 0` debug lines — these are M2 v256 format failures, benign.
-5. Headless ADT round-trip regression: `./noggit.exe --adt-roundtrip 0` (add `--adt-roundtrip-tile x,z` for one tile). Expect final log lines `adt_roundtrip: 687/687 tiles round-tripped` and `adt_roundtrip: done with exit code 0`. **The report goes to `log.txt`, not stdout** — stdout is empty. Output ADTs land in `build/install/adt_roundtrip/` (never commit).
+5. Headless ADT round-trip regression: `./noggit.exe --adt-roundtrip 0` (add `--adt-roundtrip-tile x,z` for one tile). Expect final log lines `adt_roundtrip: 687/687 tiles round-tripped`, a liquid fidelity line reading `92173 chunks / 92186 layers compared, 92173 byte-identical` (all other counters 0), and `adt_roundtrip: done with exit code 0`. **The report goes to `log.txt`, not stdout** — stdout is empty. Output ADTs land in `build/install/adt_roundtrip/` (never commit); tiles that are not byte-identical keep `.orig/.first/saved` dumps.
 
 ## Crash triage
 
@@ -62,8 +73,8 @@ This fork (origin `github.com/cbuntingde/noggit3`, tracks `wowdev/noggit3`, bran
 ## Architecture notes for the vanilla work
 
 - **Client profile**: `src/noggit/client_profile.{hpp,cpp}`. Values `vanilla_1_12_1` (default) / `wotlk_3_3_5a` (dormant). Detection: `Data/base.MPQ` → vanilla; `Data/common.MPQ` or locale dir → wotlk. Stored as `project/client_version` in settings.ini; drives the startup MPQ archive list and the MCLQ export default/path. Wired into `application.cpp` (flat-layout path validation, startup detection + log, `loadMPQs`).
-- **Settings**: `NoggitSettings` macro → `noggit::settings` singleton (`settings.ini` in cwd; keys e.g. `project/game_path`, `project/path`, `use_mclq_liquids_export`, `project/mclq_liquids_path`). UI in `src/noggit/ui/SettingsPanel.cpp`.
-- **Existing vanilla groundwork to build on, not rewrite**: MCLQ read/save in `src/noggit/MapChunk.cpp` (export behind `use_mclq_liquids_export`), 2048-byte 4-bit nibble alpha write, MTXF disabled.
+- **Settings**: `NoggitSettings` macro → `noggit::settings` singleton (`settings.ini` in cwd; keys e.g. `project/game_path`, `project/path`, `project/client_version`). UI in `src/noggit/ui/SettingsPanel.cpp`.
+- **Existing vanilla groundwork to build on, not rewrite**: MCLQ read/save in `src/noggit/MapChunk.cpp` (save always writes MCLQ on vanilla), 2048-byte 4-bit nibble alpha write, MTXF disabled.
 - **Format landmines**: MVER must be 18 (vanilla is too — the assert in `MapTile.cpp` is fine). MCNK header 0x80 in both versions; vanilla water = MCLQ at MCNK `ofsLiquid`/`sizeLiquid` (0x60/0x64); MH2O is WotLK-only. MCAL: vanilla 4-bit nibble (2048 B) vs WotLK 4096/RLE. The typed accessors in `DBC.h` are WotLK-shaped — vanilla layouts differ (P4).
 - **No undo system.** Any bulk edit (especially AI-generated terrain) must back up the ADTs it touches before writing.
 

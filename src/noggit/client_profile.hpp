@@ -34,14 +34,8 @@ namespace noggit
     // wotlk archives can contain the "{locale}" placeholder
     std::vector<std::string> archive_names (client_version version);
 
-    bool default_mclq_export (client_version version);
-
     // whether entering a map runs the full 64x64 max UID scan by default;
     // the scan loads every tile of the map and takes tens of seconds
     bool default_uid_startup_check (client_version version);
-
-    // folder mclq exports are written to; empty setting falls back to
-    // the project path
-    QString mclq_export_path();
   }
 }

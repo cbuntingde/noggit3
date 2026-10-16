@@ -4,11 +4,13 @@
 
 #include <noggit/Log.h>
 #include <noggit/MPQ.h>
+#include <noggit/MapHeaders.h>
 #include <noggit/MapTile.h>
 #include <noggit/World.h>
 #include <noggit/map_index.hpp>
 #include <noggit/settings.hpp>
 
+#include <algorithm>
 #include <cstdint>
 #include <cstring>
 #include <filesystem>
@@ -127,6 +129,413 @@ namespace
     return stats;
   }
 
+  // mcnk liquid layout (mclq, MapHeaders.h): the chunk header sits 8 bytes
+  // after the fourcc with its liquid fields at 0x60/0x64; the mclq fourcc
+  // is ofsLiquid bytes after the mcnk fourcc and the payload follows its
+  // 8 byte sub-chunk header
+  static_assert (sizeof (mclq) == 804, "mclq layout changed, the byte offsets used by the liquid metrics need updating");
+
+  struct mcnk_liquid
+  {
+    std::uint32_t flags;        // mcnk flags word, bits 2-5 name the liquid layers
+    std::uint32_t payload_size; // mclq data bytes (sizeLiquid - 8)
+    std::size_t payload_offset; // first mclq data byte in the file
+  };
+
+  // one entry per MCNK chunk, in file order; chunks are found by fourcc and
+  // skipped by their size so no sub-chunk data can be misread as a chunk
+  std::vector<mcnk_liquid> scan_mcnk_liquids (adt_bytes const& bytes)
+  {
+    std::vector<mcnk_liquid> chunks;
+
+    std::size_t i (0);
+
+    while (i + 8 + 0x80 <= bytes.size())
+    {
+      if (std::memcmp (bytes.buffer.data() + i, "KNCM", 4))
+      {
+        ++i;
+        continue;
+      }
+
+      std::uint32_t chunk_size (0);
+      std::uint32_t flags (0);
+      std::uint32_t ofs_liquid (0);
+      std::uint32_t size_liquid (0);
+
+      if ( !bytes.read_uint32_at (i + 4, chunk_size)
+        || !bytes.read_uint32_at (i + 8, flags)
+        || !bytes.read_uint32_at (i + 8 + 0x60, ofs_liquid)
+        || !bytes.read_uint32_at (i + 8 + 0x64, size_liquid))
+      {
+        break;
+      }
+
+      mcnk_liquid chunk;
+      chunk.flags = flags;
+      chunk.payload_size = size_liquid > 8 ? size_liquid - 8 : 0;
+      chunk.payload_offset = i + ofs_liquid + 8;
+      chunks.push_back (chunk);
+
+      // a sane mcnk size covers at least its 0x80 byte header; anything
+      // else means the size cannot be trusted, so fall back to scanning
+      i += chunk_size >= 0x80 ? 8 + chunk_size : 1;
+    }
+
+    return chunks;
+  }
+
+  // everything the drift-prone liquid fields hold, counted per file so the
+  // original can be compared against what the editor wrote
+  struct liquid_census
+  {
+    std::size_t chunks = 0;              // MCNK chunks seen
+    std::size_t liquid_chunks = 0;       // chunks carrying an mclq payload
+    std::size_t layers = 0;              // mclq payloads (804 bytes each)
+    std::size_t malformed_payloads = 0;  // payload size not a multiple of sizeof(mclq)
+    std::size_t lq_flag_chunks = 0;      // mcnk flags naming at least one liquid layer
+    std::size_t tile_types[8] = {};      // per liquid type across all tiles
+    std::size_t dont_render_tiles = 0;
+    std::size_t tiles_with_bits_4_5 = 0; // flag_0x10 / flag_0x20
+    std::size_t fishable_tiles = 0;
+    std::size_t fatigue_tiles = 0;
+    std::size_t flow_vertices = 0;       // vertices with a nonzero flow percentage
+    std::size_t flow_layers = 0;         // layers with n_flowvs or flow data
+  };
+
+  liquid_census census_liquids (adt_bytes const& bytes)
+  {
+    liquid_census census;
+
+    for (auto const& chunk : scan_mcnk_liquids (bytes))
+    {
+      ++census.chunks;
+
+      if (chunk.flags & 0x3C)
+      {
+        ++census.lq_flag_chunks;
+      }
+
+      if (!chunk.payload_size)
+      {
+        continue;
+      }
+
+      ++census.liquid_chunks;
+
+      if ( chunk.payload_size % sizeof (mclq)
+        || chunk.payload_offset + chunk.payload_size > bytes.size())
+      {
+        ++census.malformed_payloads;
+        continue;
+      }
+
+      std::size_t const layers (chunk.payload_size / sizeof (mclq));
+      census.layers += layers;
+
+      char const* data (bytes.buffer.data() + chunk.payload_offset);
+
+      for (std::size_t layer (0); layer < layers; ++layer)
+      {
+        mclq liquid;
+        std::memcpy (&liquid, data + layer * sizeof (mclq), sizeof (mclq));
+
+        // for magma the vertex bytes hold uv coordinates instead of flows
+        bool const magma (liquid.tiles[0].liquid_type == 6);
+
+        for (auto const& tile : liquid.tiles)
+        {
+          ++census.tile_types[tile.liquid_type];
+
+          census.dont_render_tiles += tile.dont_render;
+          census.tiles_with_bits_4_5 += tile.flag_0x10 || tile.flag_0x20;
+          census.fishable_tiles += tile.fishable;
+          census.fatigue_tiles += tile.fatigue;
+        }
+
+        for (auto const& vertex : liquid.vertices)
+        {
+          if (!magma && (vertex.water.flow_0_pct || vertex.water.flow_1_pct))
+          {
+            ++census.flow_vertices;
+          }
+        }
+
+        bool flow_data (liquid.n_flowvs != 0);
+
+        for (std::size_t b (0); !flow_data && b < sizeof (liquid.flowvs); ++b)
+        {
+          flow_data = reinterpret_cast<char const*> (liquid.flowvs)[b] != 0;
+        }
+
+        census.flow_layers += flow_data;
+      }
+    }
+
+    return census;
+  }
+
+  // how far the first save drifts from the original file, per mclq region
+  struct liquid_fidelity
+  {
+    std::size_t chunks_compared = 0;
+    std::size_t layers_compared = 0;
+    std::size_t byte_identical = 0;
+    std::size_t size_mismatch = 0;      // same chunk, different payload size
+    std::size_t minmax_diff = 0;        // min_height / max_height
+    std::size_t height_diff = 0;        // per vertex heights
+    std::size_t depth_flow_diff = 0;    // per vertex depth / magma uv / flow bytes
+    std::size_t tiles_type_diff = 0;    // tile liquid type + dont_render (low nibble)
+    std::size_t tiles_b45_diff = 0;     // tile flag_0x10 / flag_0x20
+    std::size_t tiles_ff_diff = 0;      // tile fishable / fatigue
+    std::size_t flowdata_diff = 0;      // n_flowvs + flowvs data
+    std::size_t flags_diff = 0;         // mcnk flags word
+    std::size_t lq_flags_diff = 0;      // liquid layer bits (2-5) of the flags word
+    std::size_t flags_bits_diff[32] = {}; // per bit of the flags word
+    std::size_t only_original = 0;      // chunks present in only one of the files
+    std::size_t only_saved = 0;
+  };
+
+  liquid_fidelity compare_liquids (adt_bytes const& original, adt_bytes const& saved)
+  {
+    liquid_fidelity fidelity;
+
+    auto const original_chunks (scan_mcnk_liquids (original));
+    auto const saved_chunks (scan_mcnk_liquids (saved));
+
+    if (original_chunks.size() > saved_chunks.size())
+    {
+      fidelity.only_original = original_chunks.size() - saved_chunks.size();
+    }
+    else
+    {
+      fidelity.only_saved = saved_chunks.size() - original_chunks.size();
+    }
+
+    std::size_t const common (std::min (original_chunks.size(), saved_chunks.size()));
+
+    for (std::size_t i (0); i < common; ++i)
+    {
+      mcnk_liquid const& a (original_chunks[i]);
+      mcnk_liquid const& b (saved_chunks[i]);
+
+      if (a.flags != b.flags)
+      {
+        ++fidelity.flags_diff;
+        fidelity.lq_flags_diff += (a.flags & 0x3C) != (b.flags & 0x3C);
+
+        std::uint32_t const changed (a.flags ^ b.flags);
+
+        for (int bit (0); bit < 32; ++bit)
+        {
+          fidelity.flags_bits_diff[bit] += (changed >> bit) & 1;
+        }
+      }
+
+      // both sides empty is the healthy case for a liquid-free chunk
+      if (!a.payload_size && !b.payload_size)
+      {
+        continue;
+      }
+
+      ++fidelity.chunks_compared;
+
+      if ( a.payload_size != b.payload_size
+        || a.payload_offset + a.payload_size > original.size()
+        || b.payload_offset + b.payload_size > saved.size())
+      {
+        ++fidelity.size_mismatch;
+        continue;
+      }
+
+      char const* a_data (original.buffer.data() + a.payload_offset);
+      char const* b_data (saved.buffer.data() + b.payload_offset);
+
+      std::size_t const layers (a.payload_size / sizeof (mclq));
+      fidelity.layers_compared += layers;
+
+      bool identical (true);
+      bool minmax (false);
+      bool heights (false);
+      bool depth_flow (false);
+      bool tiles_type (false);
+      bool tiles_b45 (false);
+      bool tiles_ff (false);
+      bool flowdata (false);
+
+      for (std::size_t layer (0); layer < layers; ++layer)
+      {
+        char const* a_layer (a_data + layer * sizeof (mclq));
+        char const* b_layer (b_data + layer * sizeof (mclq));
+
+        if (!std::memcmp (a_layer, b_layer, sizeof (mclq)))
+        {
+          continue;
+        }
+
+        identical = false;
+
+        if (std::memcmp (a_layer, b_layer, 8))
+        {
+          minmax = true;
+        }
+
+        for (int v (0); v < 81; ++v)
+        {
+          char const* a_vertex (a_layer + 8 + v * 8);
+          char const* b_vertex (b_layer + 8 + v * 8);
+
+          if (std::memcmp (a_vertex, b_vertex, 4))
+          {
+            depth_flow = true;
+          }
+
+          if (std::memcmp (a_vertex + 4, b_vertex + 4, 4))
+          {
+            heights = true;
+          }
+        }
+
+        for (int t (0); t < 64; ++t)
+        {
+          std::uint8_t const a_tile (static_cast<std::uint8_t> (a_layer[8 + 648 + t]));
+          std::uint8_t const b_tile (static_cast<std::uint8_t> (b_layer[8 + 648 + t]));
+
+          tiles_type |= (a_tile & 0x0F) != (b_tile & 0x0F);
+          tiles_b45 |= (a_tile & 0x30) != (b_tile & 0x30);
+          tiles_ff |= (a_tile & 0xC0) != (b_tile & 0xC0);
+        }
+
+        // n_flowvs (4 bytes) + flowvs (2 * 40 bytes)
+        flowdata |= std::memcmp (a_layer + 720, b_layer + 720, 84) != 0;
+      }
+
+      if (identical)
+      {
+        ++fidelity.byte_identical;
+        continue;
+      }
+
+      fidelity.minmax_diff += minmax;
+      fidelity.height_diff += heights;
+      fidelity.depth_flow_diff += depth_flow;
+      fidelity.tiles_type_diff += tiles_type;
+      fidelity.tiles_b45_diff += tiles_b45;
+      fidelity.tiles_ff_diff += tiles_ff;
+      fidelity.flowdata_diff += flowdata;
+    }
+
+    return fidelity;
+  }
+
+  void merge_census (liquid_census& into, liquid_census const& from)
+  {
+    into.chunks += from.chunks;
+    into.liquid_chunks += from.liquid_chunks;
+    into.layers += from.layers;
+    into.malformed_payloads += from.malformed_payloads;
+    into.lq_flag_chunks += from.lq_flag_chunks;
+    into.dont_render_tiles += from.dont_render_tiles;
+    into.tiles_with_bits_4_5 += from.tiles_with_bits_4_5;
+    into.fishable_tiles += from.fishable_tiles;
+    into.fatigue_tiles += from.fatigue_tiles;
+    into.flow_vertices += from.flow_vertices;
+    into.flow_layers += from.flow_layers;
+
+    for (int i (0); i < 8; ++i)
+    {
+      into.tile_types[i] += from.tile_types[i];
+    }
+  }
+
+  void merge_fidelity (liquid_fidelity& into, liquid_fidelity const& from)
+  {
+    into.chunks_compared += from.chunks_compared;
+    into.layers_compared += from.layers_compared;
+    into.byte_identical += from.byte_identical;
+    into.size_mismatch += from.size_mismatch;
+    into.minmax_diff += from.minmax_diff;
+    into.height_diff += from.height_diff;
+    into.depth_flow_diff += from.depth_flow_diff;
+    into.tiles_type_diff += from.tiles_type_diff;
+    into.tiles_b45_diff += from.tiles_b45_diff;
+    into.tiles_ff_diff += from.tiles_ff_diff;
+    into.flowdata_diff += from.flowdata_diff;
+    into.flags_diff += from.flags_diff;
+    into.lq_flags_diff += from.lq_flags_diff;
+
+    for (int bit (0); bit < 32; ++bit)
+    {
+      into.flags_bits_diff[bit] += from.flags_bits_diff[bit];
+    }
+
+    into.only_original += from.only_original;
+    into.only_saved += from.only_saved;
+  }
+
+  void log_fidelity (std::string const& label, liquid_fidelity const& fidelity)
+  {
+    NOGGIT_LOG << "adt_roundtrip: liquid fidelity (" << label << "): "
+      << fidelity.chunks_compared << " chunks / " << fidelity.layers_compared << " layers compared, "
+      << fidelity.byte_identical << " byte-identical, "
+      << fidelity.size_mismatch << " size mismatches, "
+      << fidelity.minmax_diff << " min/max, "
+      << fidelity.height_diff << " heights, "
+      << fidelity.depth_flow_diff << " depth/flow bytes, "
+      << fidelity.tiles_type_diff << " tile types, "
+      << fidelity.tiles_b45_diff << " tile bits 4-5, "
+      << fidelity.tiles_ff_diff << " tile bits 6-7, "
+      << fidelity.flowdata_diff << " flow data, "
+      << fidelity.flags_diff << " mcnk flags, "
+      << fidelity.lq_flags_diff << " liquid layer flags, "
+      << fidelity.only_original << " only in original, "
+      << fidelity.only_saved << " only in saved"
+      << std::endl;
+
+    std::stringstream bits;
+
+    for (int bit (0); bit < 32; ++bit)
+    {
+      if (fidelity.flags_bits_diff[bit])
+      {
+        bits << " bit" << bit << "=" << fidelity.flags_bits_diff[bit];
+      }
+    }
+
+    if (!bits.str().empty())
+    {
+      NOGGIT_LOG << "adt_roundtrip: liquid fidelity (" << label << "): changed mcnk flag bits:" << bits.str() << std::endl;
+    }
+  }
+
+  void log_census (std::string const& label, liquid_census const& census)
+  {
+    std::stringstream types;
+
+    for (int i (0); i < 8; ++i)
+    {
+      if (census.tile_types[i])
+      {
+        types << " type" << i << "=" << census.tile_types[i];
+      }
+    }
+
+    NOGGIT_LOG << "adt_roundtrip: liquid census (" << label << "): "
+      << census.chunks << " mcnk, "
+      << census.liquid_chunks << " with mclq, "
+      << census.layers << " layers, "
+      << census.malformed_payloads << " malformed payloads, "
+      << census.lq_flag_chunks << " chunks with layer flags,"
+      << types.str()
+      << ", " << census.dont_render_tiles << " dont-render tiles"
+      << ", " << census.tiles_with_bits_4_5 << " tiles with bits 4-5"
+      << ", " << census.fishable_tiles << " fishable"
+      << ", " << census.fatigue_tiles << " fatigue"
+      << ", " << census.flow_vertices << " flow vertices"
+      << ", " << census.flow_layers << " layers with flow data"
+      << std::endl;
+  }
+
   bool read_file (std::filesystem::path const& path, adt_bytes& out)
   {
     std::ifstream input (path.string(), std::ios_base::binary | std::ios_base::in);
@@ -176,6 +585,10 @@ namespace
     std::size_t tiles_total (0);
     std::size_t tiles_ok (0);
     std::vector<std::string> failed_tiles;
+
+    liquid_fidelity fidelity_total;
+    liquid_census census_original_total;
+    liquid_census census_first_total;
 
     for (int z (0); z < 64; ++z)
     {
@@ -250,6 +663,11 @@ namespace
             );
         }
 
+        // read the first generation back while it is still on disk; the
+        // liquid fidelity metrics compare the original against it
+        adt_bytes first_saved;
+        bool const first_read (read_file (first_saved_path, first_saved));
+
         // load the saved file back (it shadows the original) and save it again
         try
         {
@@ -280,6 +698,34 @@ namespace
                              );
         bool const stable (saved.hash() == resaved.hash());
 
+        // liquid fidelity metrics: informational, they do not fail the tile
+        liquid_fidelity fidelity;
+
+        if (first_read)
+        {
+          fidelity = compare_liquids (original, first_saved);
+
+          liquid_census const census_original (census_liquids (original));
+          liquid_census const census_first (census_liquids (first_saved));
+
+          merge_census (census_original_total, census_original);
+          merge_census (census_first_total, census_first);
+          merge_fidelity (fidelity_total, fidelity);
+
+          if (only_x >= 0)
+          {
+            std::string const tile_label ("tile " + std::to_string (x) + "-" + std::to_string (z));
+            log_fidelity (tile_label + ", original vs first save", fidelity);
+            log_census (tile_label + ", original", census_original);
+            log_census (tile_label + ", first save", census_first);
+          }
+        }
+        else
+        {
+          LogError << "adt_roundtrip: tile " << x << "-" << z
+            << ": first saved generation is missing, liquid fidelity not measured" << std::endl;
+        }
+
         if (chunks_ok && liquid_ok && stable)
         {
           ++tiles_ok;
@@ -290,10 +736,20 @@ namespace
             << original_stats.doodads << " m2 + " << original_stats.wmos << " wmo (models are not written in this mode))"
             << std::endl;
 
-          std::error_code cleanup_error;
-          std::filesystem::remove (saved_path, cleanup_error);
-          std::filesystem::remove (first_saved_path, cleanup_error);
-          std::filesystem::remove (original_dump_path, cleanup_error);
+          if (first_read && fidelity.byte_identical != fidelity.chunks_compared)
+          {
+            LogError << "adt_roundtrip: tile " << x << "-" << z << ": "
+              << (fidelity.chunks_compared - fidelity.byte_identical)
+              << " of " << fidelity.chunks_compared
+              << " liquid chunks are not byte-identical (dumps kept for inspection)" << std::endl;
+          }
+          else
+          {
+            std::error_code cleanup_error;
+            std::filesystem::remove (saved_path, cleanup_error);
+            std::filesystem::remove (first_saved_path, cleanup_error);
+            std::filesystem::remove (original_dump_path, cleanup_error);
+          }
         }
         else
         {
@@ -329,6 +785,11 @@ namespace
       NOGGIT_LOG << "adt_roundtrip: failed: " << failure << std::endl;
     }
 
+    // informational; pass/fail above is decided on structure and stability
+    log_fidelity ("original vs first save, all tiles", fidelity_total);
+    log_census ("all tiles, original", census_original_total);
+    log_census ("all tiles, first save", census_first_total);
+
     return failed_tiles.empty() ? 0 : 1;
   }
 }
@@ -355,15 +816,11 @@ namespace noggit
       return 1;
     }
 
-    // the save path always writes into the configured project folder and
-    // mclq export folder; redirect both to the scratch folder while running
+    // the save path always writes into the configured project folder;
+    // redirect it to the scratch folder while running
     QString const original_project_path (NoggitSettings.value ("project/path").toString());
-    QVariant const original_mclq_path (NoggitSettings.value ("project/mclq_liquids_path"));
-    QVariant const original_mclq_export (NoggitSettings.value ("use_mclq_liquids_export"));
 
     NoggitSettings.set_value ("project/path", QString::fromStdString (output_folder.string()) + "/");
-    NoggitSettings.set_value ("project/mclq_liquids_path", QString());
-    NoggitSettings.set_value ("use_mclq_liquids_export", true);
     NoggitSettings.sync();
 
     int result (1);
@@ -378,8 +835,6 @@ namespace noggit
     }
 
     NoggitSettings.set_value ("project/path", original_project_path);
-    NoggitSettings.set_value ("project/mclq_liquids_path", original_mclq_path);
-    NoggitSettings.set_value ("use_mclq_liquids_export", original_mclq_export);
     NoggitSettings.sync();
 
     NOGGIT_LOG << "adt_roundtrip: done with exit code " << result << std::endl;

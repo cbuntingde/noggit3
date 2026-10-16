@@ -87,16 +87,11 @@ namespace noggit
       browse_row (&projectPathField, "Project Path", "project/path", util::file_line_edit::directories);
       browse_row (&importPathField, "Import Path", "project/import_file", util::file_line_edit::files);
       browse_row (&wmvLogPathField, "WMV Log Path", "project/wmv_log_file", util::file_line_edit::files);
-      browse_row (&mclq_liquids_export_path, "MCLQ Liquids Export Path", "project/mclq_liquids_path", util::file_line_edit::directories);
 
       _client_version_combo = new QComboBox (this);
       _client_version_combo->addItem
-        ( "Vanilla 1.12.1 (primary)"
+        ( "Vanilla 1.12.1"
         , noggit::client_profile::to_string (noggit::client_profile::client_version::vanilla_1_12_1)
-        );
-      _client_version_combo->addItem
-        ( "WotLK 3.3.5a"
-        , noggit::client_profile::to_string (noggit::client_profile::client_version::wotlk_3_3_5a)
         );
       _client_version_combo->setToolTip ("Client file format used for loading and saving; auto-detected from the game path on startup. Requires a restart to take effect.");
       layout->addRow ("Client Version", _client_version_combo);
@@ -198,7 +193,6 @@ namespace noggit
       layout->addRow("Undock quick access texture palette", _undock_small_texture_palette = new QCheckBox(this));
 
       layout->addRow("Additional file loading log", _additional_file_loading_log = new QCheckBox(this));
-      layout->addRow("Use MCLQ Liquids (vanilla/BC) export", _use_mclq_liquids_export = new QCheckBox(this));
       layout->addRow("Only display one bounding box for models", _only_one_model_box = new QCheckBox(this));
 
 #ifdef NOGGIT_HAS_SCRIPTING
@@ -254,7 +248,6 @@ namespace noggit
       projectPathField->actual->setText (NoggitSettings.value ("project/path").toString());
       importPathField->actual->setText (NoggitSettings.value ("project/import_file").toString());
       wmvLogPathField->actual->setText (NoggitSettings.value ("project/wmv_log_file").toString());
-      mclq_liquids_export_path->actual->setText (NoggitSettings.value ("project/mclq_liquids_path").toString());
       _fov->setValue (NoggitSettings.value ("fov", 54.f).toFloat());
       _view_distance->setValue (NoggitSettings.value ("view_distance", 1000.f).toFloat());
       tabletModeCheck->setChecked (NoggitSettings.value ("tablet/enabled", false).toBool());
@@ -269,7 +262,6 @@ namespace noggit
       _async_loader_thread_count->setValue(NoggitSettings.value("async_thread_count", 1).toInt());
       _uid_cb->setChecked(NoggitSettings.value("uid_startup_check", noggit::client_profile::default_uid_startup_check (noggit::client_profile::current())).toBool());
       _additional_file_loading_log->setChecked(NoggitSettings.value("additional_file_loading_log", false).toBool());
-      _use_mclq_liquids_export->setChecked(NoggitSettings.value("use_mclq_liquids_export", noggit::client_profile::default_mclq_export (noggit::client_profile::current())).toBool());
       _only_one_model_box->setChecked(NoggitSettings.value("only_one_model_box", true).toBool());
 
 #ifdef NOGGIT_HAS_SCRIPTING
@@ -296,7 +288,6 @@ namespace noggit
       NoggitSettings.set_value ("project/path", projectPathField->actual->text());
       NoggitSettings.set_value ("project/import_file", importPathField->actual->text());
       NoggitSettings.set_value ("project/wmv_log_file", wmvLogPathField->actual->text());
-      NoggitSettings.set_value ("project/mclq_liquids_path", mclq_liquids_export_path->actual->text());
       NoggitSettings.set_value ("fov", _fov->value());
       NoggitSettings.set_value ("view_distance", _view_distance->value());
       NoggitSettings.set_value ("tablet/enabled", tabletModeCheck->isChecked());
@@ -311,7 +302,6 @@ namespace noggit
       NoggitSettings.set_value ("async_thread_count", _async_loader_thread_count->value());
       NoggitSettings.set_value ("uid_startup_check", _uid_cb->isChecked());
       NoggitSettings.set_value ("additional_file_loading_log", _additional_file_loading_log->isChecked());
-      NoggitSettings.set_value ("use_mclq_liquids_export", _use_mclq_liquids_export->isChecked());
       NoggitSettings.set_value ("only_one_model_box", _only_one_model_box->isChecked());
 
 #ifdef NOGGIT_HAS_SCRIPTING

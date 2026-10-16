@@ -27,7 +27,7 @@ namespace noggit
       layout()->addWidget (icon);
       //! \todo was Skurri32
       layout()->addWidget (new QLabel ("Noggit Studio", this));
-      layout()->addWidget (new QLabel ("a wow map editor for 3.3.5a", this));
+      layout()->addWidget (new QLabel ("a WoW 1.12.1 (vanilla) map editor fork", this));
       layout()->addWidget ( new QLabel ( "Ufoz [...], Cryect, Beket, Schlumpf, "
                                          "Tigurius, Steff, Garthog, Glararan, Cromon, "
                                          "Hanfer, Skarn, AxelSheva, Valium, Kaev, "

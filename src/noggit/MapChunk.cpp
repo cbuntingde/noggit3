@@ -1621,7 +1621,6 @@ void MapChunk::save( util::sExtendableArray &lADTFile
                    , std::map<std::string, int> &lTextures
                    , std::vector<WMOInstance> &lObjectInstances
                    , std::vector<ModelInstance>& lModelInstances
-                   , bool use_mclq_liquids
                    )
 {
   int lID;
@@ -1635,8 +1634,9 @@ void MapChunk::save( util::sExtendableArray &lADTFile
   lADTFile.Insert(lCurrentPosition + 8, 0x80, reinterpret_cast<char*>(&(header)));
   auto const lMCNK_header = lADTFile.GetPointer<MapChunkHeader>(lCurrentPosition + 8);
 
-  header.flags.flags.do_not_fix_alpha_map = use_mclq_liquids ? 0 : 1;
-
+  // the loaded flags are kept verbatim: vanilla (1.12.1) files do set some
+  // of the wotlk-named bits (e.g. do_not_fix_alpha_map), clearing them
+  // would rewrite chunks that were not edited
   lMCNK_header->flags = header.flags;
   lMCNK_header->holes = _4x4_holes;
   lMCNK_header->areaid = _area_id;
@@ -1898,7 +1898,8 @@ void MapChunk::save( util::sExtendableArray &lADTFile
   lCurrentPosition += 8 + lMCAL_Size;
   lMCNK_Size += 8 + lMCAL_Size;
 
-  if (use_mclq_liquids)
+  // vanilla MCLQ liquid: always written, an empty chunk is written when
+  // the chunk has no liquid (vanilla adts always contain the chunk)
   {
     auto liquids = liquid_chunk();
 

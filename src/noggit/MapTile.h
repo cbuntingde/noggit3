@@ -96,7 +96,7 @@ public:
   void saveTile(World* world);
 
 private:
-  void save(World* world, bool save_using_mclq_liquids);
+  void save(World* world);
 
 public:
 

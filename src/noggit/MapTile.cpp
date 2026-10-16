@@ -638,15 +638,15 @@ bool MapTile::GetVertex(float x, float z, math::vector_3d *V)
 
 void MapTile::saveTile(World* world)
 {
-  save(world, false);
-
-  if (NoggitSettings.value("use_mclq_liquids_export", noggit::client_profile::default_mclq_export (noggit::client_profile::current())).toBool())
-  {
-    save(world, true);
-  }
+  // WoW 1.12.1 (the only supported client) reads liquid from the per-chunk
+  // MCLQ, so the MCLQ variant is the only one that is ever saved. The
+  // upstream two-pass save wrote an MH2O-only file first and the MCLQ file
+  // second; whenever the second pass was skipped (setting off or invalid)
+  // the saved file silently lost all water data
+  save(world);
 }
 
-void MapTile::save(World* world, bool save_using_mclq_liquids)
+void MapTile::save(World* world)
 {
   NOGGIT_LOG << "Saving ADT \"" << filename << "\"." << std::endl;
 
@@ -960,18 +960,12 @@ void MapTile::save(World* world, bool save_using_mclq_liquids)
 
   lCurrentPosition += 8 + lMODF_Size;
 
-  //MH2O
-  if (!save_using_mclq_liquids)
-  {
-    Water.saveToFile(lADTFile, lMHDR_Position, lCurrentPosition);
-  }
-
   // MCNK
   for (int y = 0; y < 16; ++y)
   {
     for (int x = 0; x < 16; ++x)
     {
-      mChunks[y][x]->save(lADTFile, lCurrentPosition, lMCIN_Position, lTextures, lObjectInstances, lModelInstances, save_using_mclq_liquids);
+      mChunks[y][x]->save(lADTFile, lCurrentPosition, lMCIN_Position, lTextures, lObjectInstances, lModelInstances);
     }
   }
 
@@ -1023,14 +1017,7 @@ void MapTile::save(World* world, bool save_using_mclq_liquids)
     // begin with.
     f.setBuffer(lADTFile.data_up_to (lCurrentPosition)); // cleaning unused nulls at the end of file
 
-    if (save_using_mclq_liquids)
-    {
-      f.save_file_to_folder(noggit::client_profile::mclq_export_path().toStdString());
-    }
-    else
-    {
-      f.SaveFile();
-    }
+    f.SaveFile();
   }
 
   lObjectInstances.clear();
