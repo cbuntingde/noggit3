@@ -360,6 +360,13 @@ public:
   float trans;
   bool animcalc;
 
+  // parsed asset counts, for load diagnostics
+  bool is_vanilla() const { return _vanilla; }
+  std::size_t bone_count() const { return bones.size(); }
+  std::size_t particle_system_count() const { return _particles.size(); }
+  std::size_t ribbon_count() const { return _ribbons.size(); }
+  std::size_t light_count() const { return _lights.size(); }
+
 private:
   int _instance_visible = 0;
 
@@ -371,6 +378,12 @@ private:
   void initCommon(const MPQFile& f);
   bool isAnimated(const MPQFile& f);
   void initAnimated(const MPQFile& f);
+
+  // vanilla (M2 version < 264) files use different struct layouts; the header is
+  // normalized into the WotLK-shaped `header` on load, and the def arrays that
+  // embed animation tracks are translated so the rest of the loader stays
+  // version agnostic
+  void load_vanilla_defs(const MPQFile& f);
 
   void fix_shader_id_blend_override();
   void fix_shader_id_layer();
@@ -388,6 +401,18 @@ private:
   bool _need_transform_buffer_update = true;
 
   std::vector<math::vector_3d> _vertex_box_points;
+
+  // vanilla (M2 version 256/257) state
+  bool _vanilla = false;
+  uint32_t _skin_profile_ofs = 0;
+  std::vector<ModelBoneDef> _vanilla_bone_defs;
+  std::vector<ModelColorDef> _vanilla_color_defs;
+  std::vector<ModelTransDef> _vanilla_trans_defs;
+  std::vector<ModelTexAnimDef> _vanilla_texanim_defs;
+  std::vector<ModelLightDef> _vanilla_light_defs;
+  std::vector<ModelRibbonEmitterDef> _vanilla_ribbon_defs;
+  std::vector<ModelParticleEmitterDef> _vanilla_particle_defs;
+  std::vector<vanilla_particle_params> _vanilla_particle_params;
 
   // buffers;
   opengl::scoped::deferred_upload_buffers<5> _buffers;
@@ -425,6 +450,10 @@ private:
   //      <anim_id, <sub_anim_id, animation>
   std::map<uint16_t, std::map<uint16_t, ModelAnimation>> _animations_seq_per_id;
   std::map<int16_t, uint32_t> _animation_length;
+
+  // vanilla sequences index into one shared animation timeline with
+  // start/end timestamps instead of carrying a duration
+  std::map<uint16_t, std::map<uint16_t, uint32_t>> _vanilla_seq_start;
 
   std::vector<ModelRenderFlags> _render_flags;
   std::vector<ParticleSystem> _particles;

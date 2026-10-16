@@ -244,7 +244,7 @@ namespace noggit
       {
         MapEntry e;
         e.mapID = i->getInt(MapDB::MapID);
-        e.name = i->getLocalizedString(MapDB::Name);
+        e.name = i->getLocalizedString(MapDB::name_field());
         e.areaType = i->getUInt(MapDB::AreaType);
 
         if (e.areaType < 0 || e.areaType > 4 || !World::IsEditableWorld(e.mapID))

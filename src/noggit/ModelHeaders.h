@@ -4,6 +4,7 @@
 
 #include <math/vector_2d.hpp>
 #include <math/vector_3d.hpp>
+#include <math/vector_4d.hpp>
 
 #include <cstdint>
 
@@ -371,6 +372,271 @@ struct ModelBoneDef {
 
 struct ModelBoundTriangle {
   uint16_t index[3];
+};
+
+// ============================================================================
+// vanilla 1.12.1 (M2 version 256/257) layouts
+//
+// pre-BC M2 files differ from the WotLK-shaped structs above in three ways:
+//  - the header carries an extra playable_animation_lookup M2Array and an
+//    extra texture_flipbooks M2Array, and stores the skin profiles inline as
+//    an M2Array instead of a num_skin_profiles count
+//  - animation tracks (M2Track) carry an extra M2Array before the times/keys
+//    arrays, making them 28 bytes instead of AnimationBlock's 20
+//  - bones carry a 12-byte header (no unk[3]) and so are 108 bytes
+// ============================================================================
+
+/// pre-BC M2Track; the two leading M2Array fields are unused by noggit
+struct AnimationBlockVanilla {
+  int16_t type;
+  int16_t seq;
+  uint32_t nUnk;
+  uint32_t ofsUnk;
+  uint32_t nTimes;
+  uint32_t ofsTimes;
+  uint32_t nKeys;
+  uint32_t ofsKeys;
+};
+
+/// vanilla model header, 0x144 bytes
+struct ModelHeaderVanilla {
+  char id[4];
+  uint8_t version[4];
+  uint32_t nameLength;
+  uint32_t nameOfs;
+  uint32_t Flags;
+
+  uint32_t nGlobalSequences;
+  uint32_t ofsGlobalSequences;
+  uint32_t nAnimations;
+  uint32_t ofsAnimations;
+  uint32_t nSequenceLookups;
+  uint32_t ofsSequenceLookups;
+  uint32_t nPlayableAnimLookup;
+  uint32_t ofsPlayableAnimLookup;
+  uint32_t nBones;
+  uint32_t ofsBones;
+  uint32_t nKeyBoneLookup;
+  uint32_t ofsKeyBoneLookup;
+
+  uint32_t nVertices;
+  uint32_t ofsVertices;
+  uint32_t nSkinProfiles;
+  uint32_t ofsSkinProfiles;
+
+  uint32_t nColors;
+  uint32_t ofsColors;
+
+  uint32_t nTextures;
+  uint32_t ofsTextures;
+
+  uint32_t nTextureWeights;
+  uint32_t ofsTextureWeights;
+  uint32_t nTextureFlipbooks;
+  uint32_t ofsTextureFlipbooks;
+  uint32_t nTextureTransforms;
+  uint32_t ofsTextureTransforms;
+  uint32_t nTextureIndices;
+  uint32_t ofsTextureIndices;
+
+  uint32_t nMats;
+  uint32_t ofsMats;
+  uint32_t nBoneCombos;
+  uint32_t ofsBoneCombos;
+  uint32_t nTextureCombos;
+  uint32_t ofsTextureCombos;
+  uint32_t nTextureCoordCombos;
+  uint32_t ofsTextureCoordCombos;
+  uint32_t nTextureWeightCombos;
+  uint32_t ofsTextureWeightCombos;
+  uint32_t nTextureTransformCombos;
+  uint32_t ofsTextureTransformCombos;
+
+  math::vector_3d bounding_box_min;
+  math::vector_3d bounding_box_max;
+  float bounding_box_radius;
+  math::vector_3d collision_box_min;
+  math::vector_3d collision_box_max;
+  float collision_box_radius;
+
+  uint32_t nCollisionIndices;
+  uint32_t ofsCollisionIndices;
+  uint32_t nCollisionPositions;
+  uint32_t ofsCollisionPositions;
+  uint32_t nCollisionNormals;
+  uint32_t ofsCollisionNormals;
+
+  uint32_t nAttachments;
+  uint32_t ofsAttachments;
+  uint32_t nAttachmentLookup;
+  uint32_t ofsAttachmentLookup;
+  uint32_t nEvents;
+  uint32_t ofsEvents;
+  uint32_t nLights;
+  uint32_t ofsLights;
+  uint32_t nCameras;
+  uint32_t ofsCameras;
+  uint32_t nCameraLookup;
+  uint32_t ofsCameraLookup;
+  uint32_t nRibbonEmitters;
+  uint32_t ofsRibbonEmitters;
+  uint32_t nParticleEmitters;
+  uint32_t ofsParticleEmitters;
+};
+
+/// vanilla inline skin profile header, 44 bytes (no signature)
+struct ModelViewVanilla {
+  uint32_t n_index, ofs_index;
+  uint32_t n_triangle, ofs_triangle;
+  uint32_t n_vertex_property, ofs_vertex_property;
+  uint32_t n_submesh, ofs_submesh;
+  uint32_t n_texture_unit, ofs_texture_unit;
+  int32_t lod;
+};
+
+/// vanilla skin section (M2Geoset), 32 bytes: only one center position and no
+/// sort radius, unlike the WotLK-shaped ModelGeoset
+struct ModelGeosetVanilla {
+  uint16_t id;
+  uint16_t d2;
+  uint16_t vstart;
+  uint16_t vcount;
+  uint16_t istart;
+  uint16_t icount;
+  uint16_t d3;
+  uint16_t d4;
+  uint16_t d5;
+  uint16_t d6;
+  math::vector_3d center_position;
+};
+
+/// vanilla M2Sequence, 68 bytes
+struct ModelAnimationVanilla {
+  uint16_t animID;
+  uint16_t subAnimID;
+  uint32_t startTimestamp;
+  uint32_t endTimestamp;
+  float moveSpeed;
+  uint32_t flags;
+  int16_t frequency;
+  uint16_t padding;
+  uint32_t replayStart;
+  uint32_t replayEnd;
+  uint32_t blendTime;
+  math::vector_3d bounds_min;
+  math::vector_3d bounds_max;
+  float bounds_radius;
+  int16_t variationNext;
+  uint16_t aliasNext;
+};
+
+struct ModelBoneDefVanilla {
+  int32_t KeyBoneID;
+  uint32_t flags;
+  int16_t parent;
+  uint16_t submesh;
+  AnimationBlockVanilla translation;
+  AnimationBlockVanilla rotation;
+  AnimationBlockVanilla scaling;
+  math::vector_3d pivot;
+};
+
+struct ModelColorDefVanilla {
+  AnimationBlockVanilla color;
+  AnimationBlockVanilla opacity;
+};
+
+struct ModelTransDefVanilla {
+  AnimationBlockVanilla trans;
+};
+
+struct ModelTexAnimDefVanilla {
+  AnimationBlockVanilla trans, rot, scale;
+};
+
+/// classic M2Light, 184 bytes: six tracks (no "enabled" track)
+struct ModelLightDefVanilla {
+  int16_t type;
+  int16_t bone;
+  math::vector_3d pos;
+  AnimationBlockVanilla ambColor;
+  AnimationBlockVanilla ambIntensity;
+  AnimationBlockVanilla color;
+  AnimationBlockVanilla intensity;
+  AnimationBlockVanilla attStart;
+  AnimationBlockVanilla attEnd;
+};
+static_assert (sizeof (ModelLightDefVanilla) == 184, "vanilla light layout");
+
+/// classic M2RibbonEmitter, 224 bytes
+struct ModelRibbonEmitterDefVanilla {
+  int32_t id;
+  int32_t bone;
+  math::vector_3d pos;
+  int32_t nTextures;
+  int32_t ofsTextures;
+  int32_t nMaterials;
+  int32_t ofsMaterials;
+  AnimationBlockVanilla color;
+  AnimationBlockVanilla opacity;
+  AnimationBlockVanilla above;
+  AnimationBlockVanilla below;
+  float res;
+  float length;
+  float emissionAngle;
+  int16_t s1;
+  int16_t s2;
+  AnimationBlockVanilla unk1;
+  AnimationBlockVanilla unk2;
+  int32_t unknown;
+};
+static_assert (sizeof (ModelRibbonEmitterDefVanilla) == 224, "vanilla ribbon layout");
+
+/// classic M2ParticleEmitter, 504 bytes: a 52-byte header (emitterType is a
+/// uint16 here and rows precede cols), ten flat tracks, then the particle
+/// parameters stored inline instead of as per-parameter tracks
+struct ModelParticleEmitterDefVanilla {
+  int32_t id;
+  int32_t flags;
+  math::vector_3d pos;
+  int16_t bone;
+  int16_t texture;
+  int32_t nModelFileName;
+  int32_t ofsModelFileName;
+  int32_t nParticleFileName;
+  int32_t ofsParticleFileName;
+  uint16_t blendingType;
+  uint16_t emitterType;
+  uint8_t particleType;
+  uint8_t headOrTail;
+  int16_t priorityPlane;
+  uint16_t rows;
+  uint16_t cols;
+  AnimationBlockVanilla emissionSpeed;
+  AnimationBlockVanilla speedVariation;
+  AnimationBlockVanilla verticalRange;
+  AnimationBlockVanilla horizontalRange;
+  AnimationBlockVanilla gravity;
+  AnimationBlockVanilla lifespan;
+  AnimationBlockVanilla emissionRate;
+  AnimationBlockVanilla emissionAreaWidth;
+  AnimationBlockVanilla emissionAreaLength;
+  AnimationBlockVanilla zSource;
+  float midPoint;
+  uint8_t colorValues[3][4]; // BGRA per key (start/mid/end)
+  float scaleValues[3];
+  uint8_t tail[144];
+};
+static_assert (sizeof (ModelParticleEmitterDefVanilla) == 504, "vanilla particle emitter layout");
+
+/// classic particle emitters keep their color/scale ramp inline (three
+/// start/mid/end values) instead of as animation tracks, so those values are
+/// resolved at load time and handed to ParticleSystem directly
+struct vanilla_particle_params
+{
+  math::vector_4d colors[3];
+  float sizes[3];
+  float mid;
 };
 
 #pragma pack(pop)

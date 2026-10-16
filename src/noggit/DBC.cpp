@@ -89,6 +89,11 @@ std::uint32_t AreaDB::get_area_parent(int area_id)
   }
 }
 
+size_t MapDB::name_field()
+{
+  return DBCFile::is_vanilla() ? VanillaName : Name;
+}
+
 std::string MapDB::getMapName(int pMapID)
 {
   if (pMapID<0) return "Unknown map";
@@ -96,7 +101,7 @@ std::string MapDB::getMapName(int pMapID)
   try
   {
     MapDB::Record rec = gMapDB.getByID(pMapID);
-    mapName = std::string(rec.getLocalizedString(MapDB::Name));
+    mapName = std::string(rec.getLocalizedString(MapDB::name_field()));
   }
   catch (MapDB::NotFound)
   {

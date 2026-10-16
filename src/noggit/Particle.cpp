@@ -16,7 +16,8 @@ T lifeRamp(float life, float mid, const T &a, const T &b, const T &c)
   else return math::interpolation::linear((life - mid) / (1.0f - mid), b, c);
 }
 
-ParticleSystem::ParticleSystem(Model* model_, const MPQFile& f, const ModelParticleEmitterDef &mta, int *globals)
+ParticleSystem::ParticleSystem(Model* model_, const MPQFile& f, const ModelParticleEmitterDef &mta, int *globals
+                               , vanilla_particle_params const* vanilla_params)
   : model (model_)
   , emitter_type(mta.EmitterType)
   , emitter ( mta.EmitterType == 1 ? std::unique_ptr<ParticleEmitter> (std::make_unique<PlaneParticleEmitter>())
@@ -51,12 +52,26 @@ ParticleSystem::ParticleSystem(Model* model_, const MPQFile& f, const ModelParti
   , flags(mta.flags)
   , tofs (misc::frand())
 {
-  math::vector_3d colors2[3];
-  memcpy(colors2, f.getBuffer() + mta.p.colors.ofsKeys, sizeof(math::vector_3d) * 3);
-  for (size_t i = 0; i<3; ++i) {
-    float opacity = *reinterpret_cast<int16_t const*>(f.getBuffer() + mta.p.opacity.ofsKeys + i * 2);
-    colors[i] = math::vector_4d(colors2[i].x / 255.0f, colors2[i].y / 255.0f, colors2[i].z / 255.0f, opacity / 32767.0f);
-    sizes[i] = (*reinterpret_cast<float const*>(f.getBuffer() + mta.p.sizes.ofsKeys + i * 4))*mta.p.scales[i];
+  if (vanilla_params)
+  {
+    // classic ramps are inline (three BGRA colors and three scales), already
+    // resolved to floats by the model loader
+    for (size_t i = 0; i<3; ++i)
+    {
+      colors[i] = vanilla_params->colors[i];
+      sizes[i] = vanilla_params->sizes[i];
+    }
+    mid = vanilla_params->mid;
+  }
+  else
+  {
+    math::vector_3d colors2[3];
+    memcpy(colors2, f.getBuffer() + mta.p.colors.ofsKeys, sizeof(math::vector_3d) * 3);
+    for (size_t i = 0; i<3; ++i) {
+      float opacity = *reinterpret_cast<int16_t const*>(f.getBuffer() + mta.p.opacity.ofsKeys + i * 2);
+      colors[i] = math::vector_4d(colors2[i].x / 255.0f, colors2[i].y / 255.0f, colors2[i].z / 255.0f, opacity / 32767.0f);
+      sizes[i] = (*reinterpret_cast<float const*>(f.getBuffer() + mta.p.sizes.ofsKeys + i * 4))*mta.p.scales[i];
+    }
   }
 
   //transform = mta.flags & 1024;

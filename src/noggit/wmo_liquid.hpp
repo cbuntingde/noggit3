@@ -28,6 +28,9 @@ public:
 
   void upload(opengl::scoped::use_program& water_shader, liquid_render& render);
 
+  int tile_count() const { return xtiles * ytiles; }
+  int vertex_count() const { return static_cast<int>(_vertices.size()); }
+
 private:
   int initGeometry(MPQFile* f);
 

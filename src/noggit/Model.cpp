@@ -13,6 +13,7 @@
 #include <algorithm>
 #include <cassert>
 #include <map>
+#include <optional>
 #include <sstream>
 #include <string>
 
@@ -100,6 +101,101 @@ Model::Model(const std::string& filename_)
   memset(&header, 0, sizeof(ModelHeader));
 }
 
+namespace
+{
+  uint32_t m2_version(const ModelHeader& h)
+  {
+    return static_cast<uint32_t>(h.version[0])
+         | (static_cast<uint32_t>(h.version[1]) << 8)
+         | (static_cast<uint32_t>(h.version[2]) << 16)
+         | (static_cast<uint32_t>(h.version[3]) << 24);
+  }
+
+  AnimationBlock to_wotlk_block(AnimationBlockVanilla const& v)
+  {
+    AnimationBlock block;
+    block.type = v.type;
+    block.seq = v.seq;
+    block.nTimes = v.nTimes;
+    block.ofsTimes = v.ofsTimes;
+    block.nKeys = v.nKeys;
+    block.ofsKeys = v.ofsKeys;
+    return block;
+  }
+
+  // tracks that don't exist in the classic layouts the WotLK-shaped loaders
+  // still expect; seq -1 marks them as not bound to a global sequence
+  AnimationBlock empty_block()
+  {
+    AnimationBlock block;
+    block.type = 0;
+    block.seq = -1;
+    block.nTimes = 0;
+    block.ofsTimes = 0;
+    block.nKeys = 0;
+    block.ofsKeys = 0;
+    return block;
+  }
+
+  // vanilla (M2 version < 264) header -> the WotLK-shaped header the rest of the
+  // loader expects; the vanilla header carries an extra playable_animation_lookup
+  // and texture_flipbooks array and stores the skin profiles inline
+  void normalize_vanilla_header(ModelHeaderVanilla const& v, ModelHeader& h)
+  {
+    h.nameLength = v.nameLength;              h.nameOfs = v.nameOfs;
+    h.Flags = v.Flags;
+
+    h.nGlobalSequences = v.nGlobalSequences;  h.ofsGlobalSequences = v.ofsGlobalSequences;
+    h.nAnimations = v.nAnimations;            h.ofsAnimations = v.ofsAnimations;
+    h.nAnimationLookup = v.nSequenceLookups;  h.ofsAnimationLookup = v.ofsSequenceLookups;
+    h.nBones = v.nBones;                      h.ofsBones = v.ofsBones;
+    h.nKeyBoneLookup = v.nKeyBoneLookup;      h.ofsKeyBoneLookup = v.ofsKeyBoneLookup;
+
+    h.nVertices = v.nVertices;                h.ofsVertices = v.ofsVertices;
+    h.nViews = v.nSkinProfiles;
+
+    h.nColors = v.nColors;                    h.ofsColors = v.ofsColors;
+    h.nTextures = v.nTextures;                h.ofsTextures = v.ofsTextures;
+
+    h.nTransparency = v.nTextureWeights;      h.ofsTransparency = v.ofsTextureWeights;
+    h.nTexAnims = v.nTextureTransforms;       h.ofsTexAnims = v.ofsTextureTransforms;
+    h.nTexReplace = v.nTextureIndices;        h.ofsTexReplace = v.ofsTextureIndices;
+
+    h.nRenderFlags = v.nMats;                 h.ofsRenderFlags = v.ofsMats;
+    h.nBoneLookup = v.nBoneCombos;            h.ofsBoneLookup = v.ofsBoneCombos;
+    h.nTexLookup = v.nTextureCombos;          h.ofsTexLookup = v.ofsTextureCombos;
+    h.nTexUnitLookup = v.nTextureCoordCombos; h.ofsTexUnitLookup = v.ofsTextureCoordCombos;
+
+    h.nTransparencyLookup = v.nTextureWeightCombos;
+    h.ofsTransparencyLookup = v.ofsTextureWeightCombos;
+    h.nTexAnimLookup = v.nTextureTransformCombos;
+    h.ofsTexAnimLookup = v.ofsTextureTransformCombos;
+
+    h.bounding_box_min = v.bounding_box_min;
+    h.bounding_box_max = v.bounding_box_max;
+    h.bounding_box_radius = v.bounding_box_radius;
+    h.collision_box_min = v.collision_box_min;
+    h.collision_box_max = v.collision_box_max;
+    h.collision_box_radius = v.collision_box_radius;
+
+    h.nBoundingTriangles = v.nCollisionIndices;
+    h.ofsBoundingTriangles = v.ofsCollisionIndices;
+    h.nBoundingVertices = v.nCollisionPositions;
+    h.ofsBoundingVertices = v.ofsCollisionPositions;
+    h.nBoundingNormals = v.nCollisionNormals;
+    h.ofsBoundingNormals = v.ofsCollisionNormals;
+
+    h.nAttachments = v.nAttachments;          h.ofsAttachments = v.ofsAttachments;
+    h.nAttachLookup = v.nAttachmentLookup;    h.ofsAttachLookup = v.ofsAttachmentLookup;
+    h.nEvents = v.nEvents;                    h.ofsEvents = v.ofsEvents;
+    h.nLights = v.nLights;                    h.ofsLights = v.ofsLights;
+    h.nCameras = v.nCameras;                  h.ofsCameras = v.ofsCameras;
+    h.nCameraLookup = v.nCameraLookup;        h.ofsCameraLookup = v.ofsCameraLookup;
+    h.nRibbonEmitters = v.nRibbonEmitters;    h.ofsRibbonEmitters = v.ofsRibbonEmitters;
+    h.nParticleEmitters = v.nParticleEmitters; h.ofsParticleEmitters = v.ofsParticleEmitters;
+  }
+}
+
 void Model::finishLoading()
 {
   MPQFile f(filename);
@@ -113,8 +209,20 @@ void Model::finishLoading()
 
   memcpy(&header, f.getBuffer(), sizeof(ModelHeader));
 
-  // blend mode override
-  if (header.Flags & 8)
+  // pre-Wrath M2 (version < 264) uses a different header, inline skin profiles
+  // and different bone/track/geoset layouts
+  _vanilla = m2_version(header) < 264;
+  if (_vanilla)
+  {
+    ModelHeaderVanilla vanilla_header;
+    memcpy(&vanilla_header, f.getBuffer(), sizeof(ModelHeaderVanilla));
+    normalize_vanilla_header(vanilla_header, header);
+    _skin_profile_ofs = vanilla_header.ofsSkinProfiles;
+    load_vanilla_defs(f);
+  }
+
+  // blend mode override (only known to be located after the WotLK header)
+  if (!_vanilla && (header.Flags & 8))
   {
     // go to the end of the header (where the blend override data is)
     uint32_t const* blend_override_info = reinterpret_cast<uint32_t const*>(f.getBuffer() + sizeof(ModelHeader));
@@ -155,11 +263,153 @@ void Model::finishLoading()
   _state_changed.notify_all();
 }
 
+// translate the vanilla def arrays that embed animation tracks into their
+// WotLK-shaped counterparts, so the existing loaders can consume them
+void Model::load_vanilla_defs(const MPQFile& f)
+{
+  ModelBoneDefVanilla const* vbones = reinterpret_cast<ModelBoneDefVanilla const*>(f.getBuffer() + header.ofsBones);
+  _vanilla_bone_defs.resize(header.nBones);
+  for (size_t i = 0; i < header.nBones; ++i)
+  {
+    ModelBoneDef& bone = _vanilla_bone_defs[i];
+    bone.KeyBoneID = vbones[i].KeyBoneID;
+    bone.flags = vbones[i].flags;
+    bone.parent = vbones[i].parent;
+    bone.unk[0] = vbones[i].submesh;
+    bone.unk[1] = 0;
+    bone.unk[2] = 0;
+    bone.translation = to_wotlk_block(vbones[i].translation);
+    bone.rotation = to_wotlk_block(vbones[i].rotation);
+    bone.scaling = to_wotlk_block(vbones[i].scaling);
+    bone.pivot = vbones[i].pivot;
+  }
+
+  ModelColorDefVanilla const* vcolors = reinterpret_cast<ModelColorDefVanilla const*>(f.getBuffer() + header.ofsColors);
+  _vanilla_color_defs.resize(header.nColors);
+  for (size_t i = 0; i < header.nColors; ++i)
+  {
+    _vanilla_color_defs[i].color = to_wotlk_block(vcolors[i].color);
+    _vanilla_color_defs[i].opacity = to_wotlk_block(vcolors[i].opacity);
+  }
+
+  ModelTransDefVanilla const* vtrans = reinterpret_cast<ModelTransDefVanilla const*>(f.getBuffer() + header.ofsTransparency);
+  _vanilla_trans_defs.resize(header.nTransparency);
+  for (size_t i = 0; i < header.nTransparency; ++i)
+  {
+    _vanilla_trans_defs[i].trans = to_wotlk_block(vtrans[i].trans);
+  }
+
+  ModelTexAnimDefVanilla const* vtexanims = reinterpret_cast<ModelTexAnimDefVanilla const*>(f.getBuffer() + header.ofsTexAnims);
+  _vanilla_texanim_defs.resize(header.nTexAnims);
+  for (size_t i = 0; i < header.nTexAnims; ++i)
+  {
+    _vanilla_texanim_defs[i].trans = to_wotlk_block(vtexanims[i].trans);
+    _vanilla_texanim_defs[i].rot = to_wotlk_block(vtexanims[i].rot);
+    _vanilla_texanim_defs[i].scale = to_wotlk_block(vtexanims[i].scale);
+  }
+
+  ModelLightDefVanilla const* vlights = reinterpret_cast<ModelLightDefVanilla const*>(f.getBuffer() + header.ofsLights);
+  _vanilla_light_defs.resize(header.nLights);
+  for (size_t i = 0; i < header.nLights; ++i)
+  {
+    ModelLightDef& light = _vanilla_light_defs[i];
+    light.type = vlights[i].type;
+    light.bone = vlights[i].bone;
+    light.pos = vlights[i].pos;
+    light.ambColor = to_wotlk_block(vlights[i].ambColor);
+    light.ambIntensity = to_wotlk_block(vlights[i].ambIntensity);
+    light.color = to_wotlk_block(vlights[i].color);
+    light.intensity = to_wotlk_block(vlights[i].intensity);
+    light.attStart = to_wotlk_block(vlights[i].attStart);
+    light.attEnd = to_wotlk_block(vlights[i].attEnd);
+    light.Enabled = empty_block();
+  }
+
+  ModelRibbonEmitterDefVanilla const* vribbons = reinterpret_cast<ModelRibbonEmitterDefVanilla const*>(f.getBuffer() + header.ofsRibbonEmitters);
+  _vanilla_ribbon_defs.resize(header.nRibbonEmitters);
+  for (size_t i = 0; i < header.nRibbonEmitters; ++i)
+  {
+    ModelRibbonEmitterDef& ribbon = _vanilla_ribbon_defs[i];
+    ribbon.id = vribbons[i].id;
+    ribbon.bone = vribbons[i].bone;
+    ribbon.pos = vribbons[i].pos;
+    ribbon.nTextures = vribbons[i].nTextures;
+    ribbon.ofsTextures = vribbons[i].ofsTextures;
+    ribbon.nMaterials = vribbons[i].nMaterials;
+    ribbon.ofsMaterials = vribbons[i].ofsMaterials;
+    ribbon.color = to_wotlk_block(vribbons[i].color);
+    ribbon.opacity = to_wotlk_block(vribbons[i].opacity);
+    ribbon.above = to_wotlk_block(vribbons[i].above);
+    ribbon.below = to_wotlk_block(vribbons[i].below);
+    ribbon.res = vribbons[i].res;
+    ribbon.length = vribbons[i].length;
+    ribbon.Emissionangle = vribbons[i].emissionAngle;
+    ribbon.s1 = vribbons[i].s1;
+    ribbon.s2 = vribbons[i].s2;
+    ribbon.unk1 = to_wotlk_block(vribbons[i].unk1);
+    ribbon.unk2 = to_wotlk_block(vribbons[i].unk2);
+    ribbon.unknown = vribbons[i].unknown;
+  }
+
+  ModelParticleEmitterDefVanilla const* vparticles = reinterpret_cast<ModelParticleEmitterDefVanilla const*>(f.getBuffer() + header.ofsParticleEmitters);
+  _vanilla_particle_defs.resize(header.nParticleEmitters);
+  _vanilla_particle_params.resize(header.nParticleEmitters);
+  for (size_t i = 0; i < header.nParticleEmitters; ++i)
+  {
+    ModelParticleEmitterDefVanilla const& v = vparticles[i];
+    ModelParticleEmitterDef& emitter = _vanilla_particle_defs[i];
+
+    emitter.id = v.id;
+    emitter.flags = v.flags;
+    emitter.pos = v.pos;
+    emitter.bone = v.bone;
+    emitter.texture = v.texture;
+    emitter.nModelFileName = v.nModelFileName;
+    emitter.ofsModelFileName = v.ofsModelFileName;
+    emitter.nParticleFileName = v.nParticleFileName;
+    emitter.ofsParticleFileName = v.ofsParticleFileName;
+    emitter.blend = static_cast<int8_t>(v.blendingType);
+    emitter.EmitterType = static_cast<int8_t>(v.emitterType);
+    emitter.ParticleColor = 0;
+    emitter.ParticleType = static_cast<int8_t>(v.particleType);
+    emitter.HeadorTail = static_cast<int8_t>(v.headOrTail);
+    emitter.TextureTileRotation = 0;
+    emitter.cols = v.cols;
+    emitter.rows = v.rows;
+
+    emitter.EmissionSpeed = to_wotlk_block(v.emissionSpeed);
+    emitter.SpeedVariation = to_wotlk_block(v.speedVariation);
+    emitter.VerticalRange = to_wotlk_block(v.verticalRange);
+    emitter.HorizontalRange = to_wotlk_block(v.horizontalRange);
+    emitter.Gravity = to_wotlk_block(v.gravity);
+    emitter.Lifespan = to_wotlk_block(v.lifespan);
+    emitter.EmissionRate = to_wotlk_block(v.emissionRate);
+    emitter.EmissionAreaWidth = to_wotlk_block(v.emissionAreaWidth);
+    emitter.EmissionAreaLength = to_wotlk_block(v.emissionAreaLength);
+    emitter.Gravity2 = to_wotlk_block(v.zSource);
+    emitter.en = empty_block();
+
+    vanilla_particle_params& params = _vanilla_particle_params[i];
+    for (int k = 0; k < 3; ++k)
+    {
+      // colorValues are BGRA bytes for the start/mid/end keys
+      params.colors[k] = math::vector_4d ( v.colorValues[k][2] / 255.f
+                                         , v.colorValues[k][1] / 255.f
+                                         , v.colorValues[k][0] / 255.f
+                                         , v.colorValues[k][3] / 255.f
+                                         );
+      params.sizes[k] = v.scaleValues[k];
+    }
+    params.mid = v.midPoint;
+  }
+}
+
 
 bool Model::isAnimated(const MPQFile& f)
 {
   // see if we have any animated bones
-  ModelBoneDef const* bo = reinterpret_cast<ModelBoneDef const*>(f.getBuffer() + header.ofsBones);
+  ModelBoneDef const* bo = _vanilla ? _vanilla_bone_defs.data()
+                                   : reinterpret_cast<ModelBoneDef const*>(f.getBuffer() + header.ofsBones);
 
   animGeometry = false;
   animBones = false;
@@ -211,7 +461,8 @@ bool Model::isAnimated(const MPQFile& f)
   // animated colors
   if (header.nColors)
   {
-    ModelColorDef const* cols = reinterpret_cast<ModelColorDef const*>(f.getBuffer() + header.ofsColors);
+    ModelColorDef const* cols = _vanilla ? _vanilla_color_defs.data()
+                                         : reinterpret_cast<ModelColorDef const*>(f.getBuffer() + header.ofsColors);
     for (size_t i = 0; i<header.nColors; ++i)
     {
       if (cols[i].color.type != 0 || cols[i].opacity.type != 0)
@@ -224,7 +475,8 @@ bool Model::isAnimated(const MPQFile& f)
   // animated opacity
   if (header.nTransparency)
   {
-    ModelTransDef const* trs = reinterpret_cast<ModelTransDef const*>(f.getBuffer() + header.ofsTransparency);
+    ModelTransDef const* trs = _vanilla ? _vanilla_trans_defs.data()
+                                      : reinterpret_cast<ModelTransDef const*>(f.getBuffer() + header.ofsTransparency);
     for (size_t i = 0; i<header.nTransparency; ++i)
     {
       if (trs[i].trans.type != 0)
@@ -318,7 +570,8 @@ void Model::initCommon(const MPQFile& f)
 
   // init colors
   if (header.nColors) {
-    ModelColorDef const* colorDefs = reinterpret_cast<ModelColorDef const*>(f.getBuffer() + header.ofsColors);
+    ModelColorDef const* colorDefs = _vanilla ? _vanilla_color_defs.data()
+                                              : reinterpret_cast<ModelColorDef const*>(f.getBuffer() + header.ofsColors);
     for (size_t i = 0; i < header.nColors; ++i)
     {
       _colors.emplace_back (f, colorDefs[i], _global_sequences.data());
@@ -329,7 +582,8 @@ void Model::initCommon(const MPQFile& f)
   _transparency_lookup = M2Array<int16_t>(f, header.ofsTransparencyLookup, header.nTransparencyLookup);
 
   if (header.nTransparency) {
-    ModelTransDef const* trDefs = reinterpret_cast<ModelTransDef const*>(f.getBuffer() + header.ofsTransparency);
+    ModelTransDef const* trDefs = _vanilla ? _vanilla_trans_defs.data()
+                                           : reinterpret_cast<ModelTransDef const*>(f.getBuffer() + header.ofsTransparency);
     for (size_t i = 0; i < header.nTransparency; ++i)
     {
       _transparency.emplace_back (f, trDefs[i], _global_sequences.data());
@@ -340,19 +594,48 @@ void Model::initCommon(const MPQFile& f)
   // just use the first LOD/view
 
   if (header.nViews > 0) {
-    // indices - allocate space, too
-    std::string lodname = filename.substr(0, filename.length() - 3);
-    lodname.append("00.skin");
-    MPQFile g(lodname.c_str());
-    if (g.isEof()) {
-      LogError << "loading skinfile " << lodname << std::endl;
-      g.close();
-      return;
+    ModelView view_storage{};
+    ModelView const* view = nullptr;
+    char const* view_base = nullptr;
+    std::optional<MPQFile> skin_file;
+
+    if (_vanilla)
+    {
+      // pre-Wrath keeps the skin profiles inline in the M2, there are no
+      // separate .skin files to open (and the inline header has no signature)
+      ModelViewVanilla const* vanilla_view = reinterpret_cast<ModelViewVanilla const*>(f.getBuffer() + _skin_profile_ofs);
+      view_storage.n_index = vanilla_view->n_index;
+      view_storage.ofs_index = vanilla_view->ofs_index;
+      view_storage.n_triangle = vanilla_view->n_triangle;
+      view_storage.ofs_triangle = vanilla_view->ofs_triangle;
+      view_storage.n_vertex_property = vanilla_view->n_vertex_property;
+      view_storage.ofs_vertex_property = vanilla_view->ofs_vertex_property;
+      view_storage.n_submesh = vanilla_view->n_submesh;
+      view_storage.ofs_submesh = vanilla_view->ofs_submesh;
+      view_storage.n_texture_unit = vanilla_view->n_texture_unit;
+      view_storage.ofs_texture_unit = vanilla_view->ofs_texture_unit;
+      view_storage.lod = vanilla_view->lod;
+
+      view = &view_storage;
+      view_base = f.getBuffer();
+    }
+    else
+    {
+      std::string lodname = filename.substr(0, filename.length() - 3);
+      lodname.append("00.skin");
+
+      if (!MPQFile::exists(lodname)) {
+        LogError << "loading skinfile " << lodname << std::endl;
+        return;
+      }
+
+      skin_file.emplace(lodname);
+      view = reinterpret_cast<ModelView const*>(skin_file->getBuffer());
+      view_base = skin_file->getBuffer();
     }
 
-    ModelView const* view = reinterpret_cast<ModelView const*>(g.getBuffer());
-    uint16_t const* indexLookup = reinterpret_cast<uint16_t const*>(g.getBuffer() + view->ofs_index);
-    uint16_t const* triangles = reinterpret_cast<uint16_t const*>(g.getBuffer() + view->ofs_triangle);
+    uint16_t const* indexLookup = reinterpret_cast<uint16_t const*>(view_base + view->ofs_index);
+    uint16_t const* triangles = reinterpret_cast<uint16_t const*>(view_base + view->ofs_triangle);
 
     _indices.resize (view->n_triangle);
 
@@ -361,8 +644,42 @@ void Model::initCommon(const MPQFile& f)
     }
 
     // render ops
-    ModelGeoset const* model_geosets = reinterpret_cast<ModelGeoset const*>(g.getBuffer() + view->ofs_submesh);
-    ModelTexUnit const* texture_unit = reinterpret_cast<ModelTexUnit const*>(g.getBuffer() + view->ofs_texture_unit);
+    ModelGeoset const* model_geosets;
+    std::vector<ModelGeoset> vanilla_geosets;
+
+    if (_vanilla)
+    {
+      // the vanilla skin section is 32 bytes (one center position, no sort
+      // radius), not the WotLK-shaped 48
+      ModelGeosetVanilla const* vanilla_geoset_defs
+        = reinterpret_cast<ModelGeosetVanilla const*>(view_base + view->ofs_submesh);
+      vanilla_geosets.resize(view->n_submesh);
+      for (size_t i = 0; i < view->n_submesh; ++i)
+      {
+        ModelGeoset& geoset = vanilla_geosets[i];
+        geoset.id = vanilla_geoset_defs[i].id;
+        geoset.d2 = vanilla_geoset_defs[i].d2;
+        geoset.vstart = vanilla_geoset_defs[i].vstart;
+        geoset.vcount = vanilla_geoset_defs[i].vcount;
+        geoset.istart = vanilla_geoset_defs[i].istart;
+        geoset.icount = vanilla_geoset_defs[i].icount;
+        geoset.d3 = vanilla_geoset_defs[i].d3;
+        geoset.d4 = vanilla_geoset_defs[i].d4;
+        geoset.d5 = vanilla_geoset_defs[i].d5;
+        geoset.d6 = vanilla_geoset_defs[i].d6;
+        geoset.BoundingBox[0] = vanilla_geoset_defs[i].center_position;
+        geoset.BoundingBox[1] = vanilla_geoset_defs[i].center_position;
+        geoset.radius = 0.f;
+      }
+
+      model_geosets = vanilla_geosets.data();
+    }
+    else
+    {
+      model_geosets = reinterpret_cast<ModelGeoset const*>(view_base + view->ofs_submesh);
+    }
+
+    ModelTexUnit const* texture_unit = reinterpret_cast<ModelTexUnit const*>(view_base + view->ofs_texture_unit);
 
     _texture_lookup = M2Array<uint16_t>(f, header.ofsTexLookup, header.nTexLookup);
     _texture_animation_lookups = M2Array<int16_t>(f, header.ofsTexAnimLookup, header.nTexAnimLookup);
@@ -391,7 +708,7 @@ void Model::initCommon(const MPQFile& f)
       _render_passes.push_back(pass);
     }
 
-    g.close();
+    skin_file.reset();
 
     fix_shader_id_blend_override();
     fix_shader_id_layer();
@@ -1143,7 +1460,24 @@ void Model::initAnimated(const MPQFile& f)
   {
     std::vector<ModelAnimation> animations(header.nAnimations);
 
-    memcpy(animations.data(), f.getBuffer() + header.ofsAnimations, header.nAnimations * sizeof(ModelAnimation));
+    if (_vanilla)
+    {
+      // the vanilla sequence is 68 bytes and stores start/end timestamps
+      // instead of a duration
+      ModelAnimationVanilla const* vanilla_anims
+        = reinterpret_cast<ModelAnimationVanilla const*>(f.getBuffer() + header.ofsAnimations);
+      for (size_t i = 0; i < header.nAnimations; ++i)
+      {
+        animations[i].animID = vanilla_anims[i].animID;
+        animations[i].subAnimID = vanilla_anims[i].subAnimID;
+        animations[i].length = vanilla_anims[i].endTimestamp - vanilla_anims[i].startTimestamp;
+        _vanilla_seq_start[vanilla_anims[i].animID][vanilla_anims[i].subAnimID] = vanilla_anims[i].startTimestamp;
+      }
+    }
+    else
+    {
+      memcpy(animations.data(), f.getBuffer() + header.ofsAnimations, header.nAnimations * sizeof(ModelAnimation));
+    }
 
     for (auto& anim : animations)
     {
@@ -1164,7 +1498,8 @@ void Model::initAnimated(const MPQFile& f)
 
   if (animBones)
   {
-    ModelBoneDef const* mb = reinterpret_cast<ModelBoneDef const*>(f.getBuffer() + header.ofsBones);
+    ModelBoneDef const* mb = _vanilla ? _vanilla_bone_defs.data()
+                                      : reinterpret_cast<ModelBoneDef const*>(f.getBuffer() + header.ofsBones);
     for (size_t i = 0; i<header.nBones; ++i)
     {
       bones.emplace_back(f, mb[i], _global_sequences.data(), animation_files);
@@ -1173,7 +1508,8 @@ void Model::initAnimated(const MPQFile& f)
 
   if (animTextures)
   {
-    ModelTexAnimDef const* ta = reinterpret_cast<ModelTexAnimDef const*>(f.getBuffer() + header.ofsTexAnims);
+    ModelTexAnimDef const* ta = _vanilla ? _vanilla_texanim_defs.data()
+                                         : reinterpret_cast<ModelTexAnimDef const*>(f.getBuffer() + header.ofsTexAnims);
     for (size_t i=0; i<header.nTexAnims; ++i) {
       _texture_animations.emplace_back (f, ta[i], _global_sequences.data());
     }
@@ -1182,16 +1518,33 @@ void Model::initAnimated(const MPQFile& f)
 
   // particle systems
   if (header.nParticleEmitters) {
-    ModelParticleEmitterDef const* pdefs = reinterpret_cast<ModelParticleEmitterDef const*>(f.getBuffer() + header.ofsParticleEmitters);
-    for (size_t i = 0; i<header.nParticleEmitters; ++i)
+    if (_vanilla)
     {
-      try
+      for (size_t i = 0; i<header.nParticleEmitters; ++i)
       {
-        _particles.emplace_back (this, f, pdefs[i], _global_sequences.data());
+        try
+        {
+          _particles.emplace_back (this, f, _vanilla_particle_defs[i], _global_sequences.data(), &_vanilla_particle_params[i]);
+        }
+        catch (std::logic_error error)
+        {
+          LogError << "Loading particles for '" << filename << "' " << error.what() << std::endl;
+        }
       }
-      catch (std::logic_error error)
+    }
+    else
+    {
+      ModelParticleEmitterDef const* pdefs = reinterpret_cast<ModelParticleEmitterDef const*>(f.getBuffer() + header.ofsParticleEmitters);
+      for (size_t i = 0; i<header.nParticleEmitters; ++i)
       {
-        LogError << "Loading particles for '" << filename << "' " << error.what() << std::endl;
+        try
+        {
+          _particles.emplace_back (this, f, pdefs[i], _global_sequences.data());
+        }
+        catch (std::logic_error error)
+        {
+          LogError << "Loading particles for '" << filename << "' " << error.what() << std::endl;
+        }
       }
     }
   }
@@ -1200,7 +1553,8 @@ void Model::initAnimated(const MPQFile& f)
 
   // ribbons
   if (header.nRibbonEmitters) {
-    ModelRibbonEmitterDef const* rdefs = reinterpret_cast<ModelRibbonEmitterDef const*>(f.getBuffer() + header.ofsRibbonEmitters);
+    ModelRibbonEmitterDef const* rdefs = _vanilla ? _vanilla_ribbon_defs.data()
+                                                  : reinterpret_cast<ModelRibbonEmitterDef const*>(f.getBuffer() + header.ofsRibbonEmitters);
     for (size_t i = 0; i<header.nRibbonEmitters; ++i) {
       _ribbons.emplace_back(this, f, rdefs[i], _global_sequences.data());
     }
@@ -1209,7 +1563,8 @@ void Model::initAnimated(const MPQFile& f)
 
   // init lights
   if (header.nLights) {
-    ModelLightDef const* lDefs = reinterpret_cast<ModelLightDef const*>(f.getBuffer() + header.ofsLights);
+    ModelLightDef const* lDefs = _vanilla ? _vanilla_light_defs.data()
+                                          : reinterpret_cast<ModelLightDef const*>(f.getBuffer() + header.ofsLights);
     for (size_t i=0; i<header.nLights; ++i)
       _lights.emplace_back (f, lDefs[i], _global_sequences.data());
   }
@@ -1266,13 +1621,19 @@ void Model::animate(math::matrix_4x4 const& model_view, int anim_id, int anim_ti
 
   ModelAnimation const& a = _animations_seq_per_id[anim_id][current_sub_anim];
 
+  // vanilla keys are stored on one timeline shared by every sequence, so the
+  // sequence's start timestamp has to be added instead of starting at 0
+  int const track_time = _vanilla
+                       ? static_cast<int>(_vanilla_seq_start[anim_id][current_sub_anim]) + time_for_anim
+                       : t;
+
   _current_anim_seq = a.Index;//_animations_seq_lookup[anim_id][current_sub_anim];
-  _anim_time = t;
+  _anim_time = track_time;
   _global_animtime = anim_time;
 
   if (animBones)
   {
-    calcBones(model_view, _current_anim_seq, t, _global_animtime);
+    calcBones(model_view, _current_anim_seq, track_time, _global_animtime);
   }
 
   if (animGeometry)
@@ -1316,18 +1677,26 @@ void Model::animate(math::matrix_4x4 const& model_view, int anim_id, int anim_ti
   for (auto& particle : _particles)
   {
     // random time distribution for teh win ..?
-    int pt = (t + static_cast<int>(tmax*particle.tofs)) % tmax;
+    int pt = track_time + static_cast<int>(tmax * particle.tofs);
+
+    // vanilla keys all live on one shared timeline, wrapping them into the
+    // sequence window would sample the wrong keys
+    if (!_vanilla)
+    {
+      pt %= tmax;
+    }
+
     particle.setup(_current_anim_seq, pt, _global_animtime);
   }
 
   for (size_t i = 0; i<header.nRibbonEmitters; ++i)
   {
-    _ribbons[i].setup(_current_anim_seq, t, _global_animtime);
+    _ribbons[i].setup(_current_anim_seq, track_time, _global_animtime);
   }
 
   for (auto& tex_anim : _texture_animations)
   {
-    tex_anim.calc(_current_anim_seq, t, _anim_time);
+    tex_anim.calc(_current_anim_seq, track_time, _anim_time);
   }
 }
 

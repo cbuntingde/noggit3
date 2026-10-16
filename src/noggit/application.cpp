@@ -21,6 +21,7 @@
 #include <filesystem>
 
 #include <algorithm>
+#include <cctype>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -30,6 +31,7 @@
 #include <future>
 #include <iostream>
 #include <list>
+#include <memory>
 #include <string>
 #include <thread>
 #include <vector>
@@ -313,6 +315,8 @@ Noggit::Noggit(int argc, char *argv[])
   int roundtrip_map_id = -1;
   int roundtrip_tile_x = -1;
   int roundtrip_tile_z = -1;
+  std::vector<std::pair<std::string, std::string>> extract_files;
+  std::vector<std::string> asset_check_paths;
 
   for (int i = 1; i < argc; ++i)
   {
@@ -324,6 +328,149 @@ Noggit::Noggit(int argc, char *argv[])
     {
       std::sscanf(argv[++i], "%d,%d", &roundtrip_tile_x, &roundtrip_tile_z);
     }
+    else if (!std::strcmp(argv[i], "--extract") && i + 2 < argc)
+    {
+      std::string const archive_path (argv[++i]);
+      extract_files.emplace_back (archive_path, argv[++i]);
+    }
+    else if (!std::strcmp(argv[i], "--asset-check") && i + 1 < argc)
+    {
+      asset_check_paths.emplace_back (argv[++i]);
+    }
+  }
+
+  // headless asset load check: construct and fully load M2/WMO files through
+  // the real loaders without creating a GL context, so the vanilla parsing can
+  // be validated on real client data
+  if (!asset_check_paths.empty())
+  {
+    int failures = 0;
+    int loaded = 0;
+
+    std::vector<std::unique_ptr<Model>> models;
+    std::vector<std::unique_ptr<WMO>> wmos;
+
+    for (auto const& path : asset_check_paths)
+    {
+      if (!MPQFile::exists (path))
+      {
+        LogError << "asset-check: \"" << path << "\" not found in the archives." << std::endl;
+        ++failures;
+        continue;
+      }
+
+      bool const is_wmo (path.size() >= 4
+                      && (path.compare (path.size() - 4, 4, ".wmo") == 0
+                       || path.compare (path.size() - 4, 4, ".WMO") == 0));
+
+      // the numbered group archives (..._000.wmo) are not standalone WMOS
+      if (is_wmo && path.size() >= 8 && path[path.size() - 8] == '_'
+        && std::isdigit (static_cast<unsigned char> (path[path.size() - 7])))
+      {
+        NOGGIT_LOG << "asset-check: skipping WMO group file " << path << std::endl;
+        continue;
+      }
+
+      if (is_wmo)
+      {
+        auto wmo = std::make_unique<WMO> (path);
+        AsyncLoader::instance->queue_for_load (wmo.get());
+        wmos.push_back (std::move (wmo));
+      }
+      else
+      {
+        auto model = std::make_unique<Model> (path);
+        AsyncLoader::instance->queue_for_load (model.get());
+        models.push_back (std::move (model));
+      }
+    }
+
+    AsyncLoader::instance->wait_queue_empty();
+
+    for (auto const& model : models)
+    {
+      if (model->loading_failed())
+      {
+        LogError << "asset-check: FAILED M2 " << model->filename << std::endl;
+        ++failures;
+      }
+      else
+      {
+        NOGGIT_LOG << "asset-check: ok M2 " << model->filename
+          << " vanilla=" << model->is_vanilla()
+          << " bones=" << model->bone_count()
+          << " particles=" << model->particle_system_count()
+          << " ribbons=" << model->ribbon_count()
+          << " lights=" << model->light_count()
+          << std::endl;
+        ++loaded;
+      }
+    }
+
+    for (auto const& wmo : wmos)
+    {
+      if (wmo->loading_failed())
+      {
+        LogError << "asset-check: FAILED WMO " << wmo->filename << std::endl;
+        ++failures;
+      }
+      else
+      {
+        int liquid_groups = 0;
+        int liquid_tiles = 0;
+        int liquid_vertices = 0;
+
+        for (auto const& group : wmo->groups)
+        {
+          if (!group.liquid)
+          {
+            continue;
+          }
+
+          ++liquid_groups;
+          liquid_tiles += group.liquid->tile_count();
+          liquid_vertices += group.liquid->vertex_count();
+        }
+
+        NOGGIT_LOG << "asset-check: ok WMO " << wmo->filename
+          << " groups=" << wmo->groups.size()
+          << " materials=" << wmo->materials.size()
+          << " textures=" << wmo->textures.size()
+          << " liquid_groups=" << liquid_groups
+          << " liquid_tiles=" << liquid_tiles
+          << " liquid_vertices=" << liquid_vertices
+          << " has_liquids=" << wmo->has_liquids()
+          << std::endl;
+        ++loaded;
+      }
+    }
+
+    NOGGIT_LOG << "asset-check: " << loaded << " ok, " << failures << " failed." << std::endl;
+
+    std::exit (failures ? 1 : 0);
+  }
+
+  // dump files from the client archives to disk; used to get ground truth
+  // on vanilla file layouts the loaders have to parse
+  if (!extract_files.empty())
+  {
+    int failures = 0;
+
+    for (auto const& [archive_path, output_path] : extract_files)
+    {
+      // MPQFile's constructor throws for a missing file, so check first
+      if (!MPQFile::exists (archive_path))
+      {
+        LogError << "extract: file \"" << archive_path << "\" not found in the archives." << std::endl;
+        ++failures;
+        continue;
+      }
+
+      MPQFile extracted (archive_path);
+      extracted.save_file (output_path);
+    }
+
+    std::exit (failures ? 1 : 0);
   }
 
   if (roundtrip_map_id >= 0)

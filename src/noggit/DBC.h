@@ -36,11 +36,16 @@ public:
   static const size_t MapID = 0;        // uint
   static const size_t InternalName = 1;    // string
   static const size_t AreaType = 2;      // uint
-  static const size_t IsBattleground = 4;    // uint
-  static const size_t Name = 5;        // loc
+  static const size_t IsBattleground = 4;    // uint (wotlk only)
+  static const size_t Name = 5;        // loc (wotlk)
+  static const size_t VanillaName = 4;  // loc (vanilla)
 
   static const size_t LoadingScreen = 57;    // uint [LoadingScreen]
   static std::string getMapName(int pMapID);
+
+  // vanilla Map.dbc has no IsBattleground column, so its localized name
+  // block sits one field earlier than the wotlk one
+  static size_t name_field();
 };
 
 class LoadingScreensDB : public DBCFile

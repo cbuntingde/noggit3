@@ -53,12 +53,21 @@ public:
       int loc = locale;
       if (locale == -1)
       {
-        assert(field < file.fieldCount - 8);
-        for (loc = 0; loc < 9; loc++)
+        // vanilla's LocalizedString is 8 locale strings followed by a flags
+        // word, so the flags slot must not be read as a string offset
+        int const locale_slots = static_cast<int>(file.locale_count);
+        assert(field + locale_slots <= file.fieldCount);
+
+        for (loc = 0; loc < locale_slots; loc++)
         {
-          size_t stringOffset = getUInt(field + loc);
-          if (stringOffset != 0)
+          if (getUInt(field + loc) != 0)
             break;
+        }
+
+        // no locale populated: the trailing flags word is not a string
+        if (loc == locale_slots)
+        {
+          return "";
         }
       }
 
@@ -121,6 +130,9 @@ public:
 
   inline size_t getRecordCount() const { return recordCount; }
   inline size_t getFieldCount() const { return fieldCount; }
+
+  // whether the active client profile is vanilla, whose dbc layouts differ
+  static bool is_vanilla();
   inline Record getByID(unsigned int id, size_t field = 0)
   {
     for (Iterator i = begin(); i != end(); ++i)
@@ -137,6 +149,9 @@ private:
   size_t recordCount;
   size_t fieldCount;
   size_t stringSize;
+  // locale strings a LocalizedString holds before its flags word;
+  // vanilla has 8, later clients have more
+  size_t locale_count = 9;
   std::vector<unsigned char> data;
   std::vector<char> stringTable;
 };

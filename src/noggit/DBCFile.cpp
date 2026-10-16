@@ -1,5 +1,6 @@
 // This file is part of Noggit3, licensed under GNU General Public License (version 3).
 
+#include <noggit/client_profile.hpp>
 #include <noggit/DBCFile.h>
 #include <noggit/Log.h>
 #include <noggit/MPQ.h>
@@ -9,6 +10,11 @@
 DBCFile::DBCFile(const std::string& _filename)
   : filename(_filename)
 {}
+
+bool DBCFile::is_vanilla()
+{
+  return noggit::client_profile::current() == noggit::client_profile::client_version::vanilla_1_12_1;
+}
 
 void DBCFile::open()
 {
@@ -34,6 +40,8 @@ void DBCFile::open()
   {
     throw std::logic_error ("non four-byte-columns not supported");
   }
+
+  locale_count = is_vanilla() ? 8 : 9;
 
   data.resize (recordSize * recordCount);
   f.read (data.data(), data.size());

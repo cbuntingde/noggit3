@@ -83,7 +83,8 @@ class ParticleSystem
 public:
   float tofs;
 
-  ParticleSystem(Model*, const MPQFile& f, const ModelParticleEmitterDef &mta, int *globals);
+  ParticleSystem(Model*, const MPQFile& f, const ModelParticleEmitterDef &mta, int *globals
+                , vanilla_particle_params const* vanilla_params = nullptr);
   ParticleSystem(ParticleSystem const& other);
   ParticleSystem(ParticleSystem&&);
   ParticleSystem& operator= (ParticleSystem const&) = delete;

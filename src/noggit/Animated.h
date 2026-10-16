@@ -7,12 +7,32 @@
 #include <noggit/ModelHeaders.h>
 
 #include <cassert>
+#include <cstring>
 #include <map>
 #include <vector>
 #include <memory>
 
 namespace Animation
 {
+  // pre-Wrath M2 (version < 264) keeps one flat timestamp/key array per
+  // animation track, shared by every sequence on a single timeline; the
+  // per-animation AnimationBlockHeader indirection (and .anim files) only
+  // exist from WotLK on
+  inline bool tracks_are_flat(const MPQFile& file)
+  {
+    if (file.getSize() < 8 || std::memcmp(file.getBuffer(), "MD20", 4) != 0)
+    {
+      return false;
+    }
+
+    char const* buffer = file.getBuffer();
+    uint32_t version = static_cast<uint8_t>(buffer[4])
+                     | (static_cast<uint32_t>(static_cast<uint8_t>(buffer[5])) << 8)
+                     | (static_cast<uint32_t>(static_cast<uint8_t>(buffer[6])) << 16)
+                     | (static_cast<uint32_t>(static_cast<uint8_t>(buffer[7])) << 24);
+
+    return version < 264;
+  }
   namespace Interpolation
   {
     //! \todo C++0x: Change namespace to "enum class Type : int16_t", remove typedef.
@@ -74,6 +94,7 @@ namespace Animation
     int32_t* _globalSequences;
 
     Animation::Interpolation::Type::Type_t _interpolationType;
+    bool _flat_tracks = false;
 
     std::map<AnimationIdType, TimestampTypeVectorType> times;
     std::map<AnimationIdType, AnimatedTypeVectorType> data;
@@ -105,6 +126,10 @@ namespace Animation
         {
           time = TimestampType();
         }
+        anim = AnimationIdType();
+      }
+      else if (_flat_tracks)
+      {
         anim = AnimationIdType();
       }
 
@@ -186,39 +211,52 @@ namespace Animation
         assert(_globalSequences && "Animation said to have global sequence, but pointer to global sequence data is nullptr");
       }
 
-      const AnimationBlockHeader* timestampHeaders = file.get<AnimationBlockHeader>(animationBlock.ofsTimes);
-      const AnimationBlockHeader* keyHeaders = file.get<AnimationBlockHeader>(animationBlock.ofsKeys);
+      _flat_tracks = tracks_are_flat(file);
 
-      for (size_t j = 0; j < animationBlock.nTimes; ++j)
+      // pre-Wrath tracks hold the timestamps/keys directly, all sequences
+      // sharing one timeline; WotLK indirection uses one header per animation
+      size_t const timestamp_block_count = _flat_tracks ? 1 : animationBlock.nTimes;
+      size_t const key_block_count = _flat_tracks ? 1 : animationBlock.nKeys;
+
+      const AnimationBlockHeader* timestampHeaders = _flat_tracks ? nullptr : file.get<AnimationBlockHeader>(animationBlock.ofsTimes);
+      const AnimationBlockHeader* keyHeaders = _flat_tracks ? nullptr : file.get<AnimationBlockHeader>(animationBlock.ofsKeys);
+
+      for (size_t j = 0; j < timestamp_block_count; ++j)
       {
-        const TimestampType* timestamps = j < animation_files.size() && animation_files[j] ?
-          animation_files[j]->get<TimestampType>(timestampHeaders[j].ofsEntries) :
-          file.get<TimestampType>(timestampHeaders[j].ofsEntries);
+        size_t const count = _flat_tracks ? animationBlock.nTimes : timestampHeaders[j].nEntries;
+        size_t const ofs = _flat_tracks ? animationBlock.ofsTimes : timestampHeaders[j].ofsEntries;
 
-        for (size_t i = 0; i < timestampHeaders[j].nEntries; ++i)
+        const TimestampType* timestamps = j < animation_files.size() && animation_files[j] ?
+          animation_files[j]->get<TimestampType>(ofs) :
+          file.get<TimestampType>(ofs);
+
+        for (size_t i = 0; i < count; ++i)
         {
           times[j].push_back(timestamps[i]);
         }
       }
 
-      for (size_t j = 0; j < animationBlock.nKeys; ++j)
+      for (size_t j = 0; j < key_block_count; ++j)
       {
+        size_t const count = _flat_tracks ? animationBlock.nKeys : keyHeaders[j].nEntries;
+        size_t const ofs = _flat_tracks ? animationBlock.ofsKeys : keyHeaders[j].ofsEntries;
+
         const DataType* keys = j < animation_files.size() && animation_files[j] ?
-          animation_files[j]->get<DataType>(keyHeaders[j].ofsEntries) :
-          file.get<DataType>(keyHeaders[j].ofsEntries);
+          animation_files[j]->get<DataType>(ofs) :
+          file.get<DataType>(ofs);
 
         switch (_interpolationType)
         {
         case Animation::Interpolation::Type::NONE:
         case Animation::Interpolation::Type::LINEAR:
-          for (size_t i = 0; i < keyHeaders[j].nEntries; ++i)
+          for (size_t i = 0; i < count; ++i)
           {
             data[j].push_back(_conversion(keys[i]));
           }
           break;
 
         case Animation::Interpolation::Type::HERMITE:
-          for (size_t i = 0; i < keyHeaders[j].nEntries; ++i)
+          for (size_t i = 0; i < count; ++i)
           {
             data[j].push_back(_conversion(keys[i * 3]));
             in[j].push_back(_conversion(keys[i * 3 + 1]));
