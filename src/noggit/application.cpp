@@ -1,6 +1,7 @@
 // This file is part of Noggit3, licensed under GNU General Public License (version 3).
 
 #include <noggit/AsyncLoader.h>
+#include <noggit/client_profile.hpp>
 #include <noggit/DBC.h>
 #include <noggit/Log.h>
 #include <noggit/MPQ.h>
@@ -9,6 +10,7 @@
 #include <noggit/ModelManager.h> // ModelManager::report()
 #include <noggit/TextureManager.h> // TextureManager::report()
 #include <noggit/WMO.h> // WMOManager::report()
+#include <noggit/adt_roundtrip.hpp>
 #include <noggit/errorHandling.h>
 #include <noggit/liquid_layer.hpp>
 #include <noggit/settings.hpp>
@@ -19,7 +21,9 @@
 #include <filesystem>
 
 #include <algorithm>
+#include <cstdio>
 #include <cstdlib>
+#include <cstring>
 #include <ctime>
 #include <chrono>
 #include <fstream>
@@ -99,46 +103,35 @@ void Noggit::loadMPQs()
     }
   }
 
-  std::vector<std::string> archiveNames;
-  archiveNames.push_back("common.MPQ");
-  archiveNames.push_back("common-2.MPQ");
-  archiveNames.push_back("expansion.MPQ");
-  archiveNames.push_back("lichking.MPQ");
-  archiveNames.push_back("patch.MPQ");
-  archiveNames.push_back("patch-{number}.MPQ");
-  archiveNames.push_back("patch-{character}.MPQ");
+  auto const profile (noggit::client_profile::current());
 
-  //archiveNames.push_back( "{locale}/backup-{locale}.MPQ" );
-  //archiveNames.push_back( "{locale}/base-{locale}.MPQ" );
-  archiveNames.push_back("{locale}/locale-{locale}.MPQ");
-  //archiveNames.push_back( "{locale}/speech-{locale}.MPQ" );
-  archiveNames.push_back("{locale}/expansion-locale-{locale}.MPQ");
-  //archiveNames.push_back( "{locale}/expansion-speech-{locale}.MPQ" );
-  archiveNames.push_back("{locale}/lichking-locale-{locale}.MPQ");
-  //archiveNames.push_back( "{locale}/lichking-speech-{locale}.MPQ" );
-  archiveNames.push_back("{locale}/patch-{locale}.MPQ");
-  archiveNames.push_back("{locale}/patch-{locale}-{number}.MPQ");
-  archiveNames.push_back("{locale}/patch-{locale}-{character}.MPQ");
+  std::vector<std::string> archiveNames (noggit::client_profile::archive_names (profile));
 
-  archiveNames.push_back("development.MPQ");
-
-  const char * locales[] = { "enGB", "enUS", "deDE", "koKR", "frFR", "zhCN", "zhTW", "esES", "esMX", "ruRU" };
   const char * locale("****");
 
-  // Find locale, take first one.
-  for (int i(0); i < 10; ++i)
+  if (profile == noggit::client_profile::client_version::vanilla_1_12_1)
   {
-    if (std::filesystem::exists (wowpath / "Data" / locales[i]))
-    {
-      locale = locales[i];
-      NOGGIT_LOG << "Locale: " << locale << std::endl;
-      break;
-    }
+    NOGGIT_LOG << "Using flat vanilla data layout (no locale subdirectories)." << std::endl;
   }
-  if (!strcmp(locale, "****"))
+  else
   {
-    LogError << "Could not find locale directory. Be sure, that there is one containing the file \"realmlist.wtf\"." << std::endl;
-    //return -1;
+    const char * locales[] = { "enGB", "enUS", "deDE", "koKR", "frFR", "zhCN", "zhTW", "esES", "esMX", "ruRU" };
+
+    // Find locale, take first one.
+    for (int i(0); i < 10; ++i)
+    {
+      if (std::filesystem::exists (wowpath / "Data" / locales[i]))
+      {
+        locale = locales[i];
+        NOGGIT_LOG << "Locale: " << locale << std::endl;
+        break;
+      }
+    }
+    if (!strcmp(locale, "****"))
+    {
+      LogError << "Could not find locale directory. Be sure, that there is one containing the file \"realmlist.wtf\"." << std::endl;
+      //return -1;
+    }
   }
 
 
@@ -189,6 +182,13 @@ namespace
       LogError << "Path \"" << qPrintable (path.absolutePath ())
         << "\" does not exist." << std::endl;
       return false;
+    }
+
+    // 1.x clients use a flat Data folder (base.MPQ, terrain.MPQ, ...)
+    // without locale subfolders
+    if (path.exists ("Data/base.MPQ"))
+    {
+      return true;
     }
 
     QStringList locales;
@@ -289,8 +289,64 @@ Noggit::Noggit(int argc, char *argv[])
   NoggitSettings.set_value ("project/game_path", path.absolutePath());
   NoggitSettings.set_value ("project/path", QString::fromStdString(project_path));
 
+  // resolve the client profile; detection from the game folder's layout
+  // wins, else the stored value, else vanilla (the primary target)
+  if (auto const detected = noggit::client_profile::detect_from_game_path (path.absolutePath()))
+  {
+    noggit::client_profile::set_current (*detected);
+    NOGGIT_LOG << "Client profile: "
+      << noggit::client_profile::to_string (*detected).toStdString()
+      << " (detected from game path)" << std::endl;
+  }
+  else
+  {
+    NOGGIT_LOG << "Client profile: "
+      << noggit::client_profile::to_string (noggit::client_profile::current()).toStdString()
+      << " (game path layout unknown, using stored/default profile)" << std::endl;
+  }
+
   loadMPQs(); // listfiles are not available straight away! They are async! Do not rely on anything at this point!
   OpenDBs();
+
+  // headless ADT round-trip check; runs before any window or GL context
+  // is created so it stays usable on machines without display support
+  int roundtrip_map_id = -1;
+  int roundtrip_tile_x = -1;
+  int roundtrip_tile_z = -1;
+
+  for (int i = 1; i < argc; ++i)
+  {
+    if (!std::strcmp(argv[i], "--adt-roundtrip") && i + 1 < argc)
+    {
+      roundtrip_map_id = std::atoi(argv[++i]);
+    }
+    else if (!std::strcmp(argv[i], "--adt-roundtrip-tile") && i + 1 < argc)
+    {
+      std::sscanf(argv[++i], "%d,%d", &roundtrip_tile_x, &roundtrip_tile_z);
+    }
+  }
+
+  if (roundtrip_map_id >= 0)
+  {
+    std::string map_name;
+
+    for (DBCFile::Iterator it = gMapDB.begin(); it != gMapDB.end(); ++it)
+    {
+      if (it->getInt(MapDB::MapID) == roundtrip_map_id)
+      {
+        map_name = it->getString(MapDB::InternalName);
+        break;
+      }
+    }
+
+    if (map_name.empty())
+    {
+      LogError << "adt_roundtrip: map id " << roundtrip_map_id << " does not exist in Map.dbc." << std::endl;
+      std::exit (1);
+    }
+
+    std::exit (noggit::run_adt_roundtrip (map_name, roundtrip_map_id, roundtrip_tile_x, roundtrip_tile_z));
+  }
 
   if (!QGLFormat::hasOpenGL())
   {

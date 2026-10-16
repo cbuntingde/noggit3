@@ -16,6 +16,9 @@
 
 #include <forward_list>
 
+#include <chrono>
+#include <stdexcept>
+
 MapIndex::MapIndex (const std::string &pBasename, int map_id, World* world)
   : basename(pBasename)
   , _map_id (map_id)
@@ -890,6 +893,11 @@ uid_fix_status MapIndex::fixUIDs (World* world, bool cancel_on_model_loading_err
 
 void MapIndex::searchMaxUID()
 {
+  NOGGIT_LOG << "searchMaxUID: scanning \"" << basename << "\" (map " << _map_id << ")..." << std::endl;
+
+  auto const start (std::chrono::steady_clock::now());
+  std::size_t tiles_scanned = 0;
+
   for (int z = 0; z < 64; ++z)
   {
     for (int x = 0; x < 64; ++x)
@@ -901,9 +909,28 @@ void MapIndex::searchMaxUID()
 
       std::stringstream filename;
       filename << "World\\Maps\\" << basename << "\\" << basename << "_" << x << "_" << z << ".adt";
-      highestGUID = std::max(highestGUID, getHighestGUIDFromFile(filename.str()));
+
+      try
+      {
+        uint32_t const tile_max_uid (getHighestGUIDFromFile(filename.str()));
+
+        LogDebug << "searchMaxUID: tile " << x << "-" << z << ", max uid " << tile_max_uid << "." << std::endl;
+
+        highestGUID = std::max(highestGUID, tile_max_uid);
+        ++tiles_scanned;
+      }
+      catch (std::exception const& e)
+      {
+        // the wdt claims the tile exists but it can't be read;
+        // skip it instead of aborting the whole scan
+        LogError << "searchMaxUID: could not read \"" << filename.str() << "\": " << e.what() << std::endl;
+      }
     }
   }
+
+  NOGGIT_LOG << "searchMaxUID: scanned " << tiles_scanned << " tiles, highest uid is " << highestGUID
+    << ", took " << std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - start).count()
+    << " ms." << std::endl;
 
   saveMaxUID();
 }

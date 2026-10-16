@@ -90,6 +90,13 @@ void AsyncLoader::process()
       {
         _important_object_failed_loading = true;
       }
+
+      // a failed load has to release its slot like a successful one,
+      // otherwise the object stays in _currently_loading forever and
+      // ensure_deletable/wait_queue_empty wait on it endlessly
+      _currently_loading.remove (object);
+      _object_queued_count--;
+      _state_changed.notify_all();
     }
   }
 }

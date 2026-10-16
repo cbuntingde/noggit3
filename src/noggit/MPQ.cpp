@@ -229,10 +229,21 @@ MPQFile::~MPQFile()
 
 bool MPQFile::exists (std::string const& filename)
 {
+  // an empty name would resolve to the project folder itself
+  if (filename.empty())
+  {
+    return false;
+  }
+
   return existsOnDisk (filename) || existsInMPQ (filename);
 }
 bool MPQFile::existsOnDisk (std::string const& filename)
 {
+  if (filename.empty())
+  {
+    return false;
+  }
+
   return std::filesystem::exists (getDiskPath (filename));
 }
 

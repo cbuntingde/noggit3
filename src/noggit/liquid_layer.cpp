@@ -8,6 +8,7 @@
 #include <noggit/Selection.h>
 
 #include <algorithm>
+#include <cmath>
 #include <string>
 
 namespace
@@ -68,8 +69,12 @@ liquid_layer::liquid_layer(math::vector_3d const& base, mclq& liquid, int liquid
         lv.uv = default_uv(x, z);
       }
 
-      // sometimes there's garbage data on unused tiles that mess things up
-      lv.position = { pos.x + UNITSIZE * x, std::clamp(v.height, _minimum, _maximum), pos.z + UNITSIZE * z };
+      // keep the raw height: vanilla files use FLT_MAX as "no liquid here"
+      // sentinel on dry vertices, and clamping it into the header range
+      // turns it into a plausible real height; on reload such a height can
+      // fall below the terrain and zero depths that were still intact on
+      // the first load, which makes every save differ from the previous one
+      lv.position = { pos.x + UNITSIZE * x, v.height, pos.z + UNITSIZE * z };
 
       _vertices.push_back(lv);
     }
@@ -356,8 +361,8 @@ void liquid_layer::save(util::sExtendableArray& adt, int base_pos, int& info_pos
       for (int x = info.xOffset; x <= info.xOffset + info.width; ++x)
       {
         mh2o_uv uv;
-        uv.x = static_cast<std::uint16_t>(std::min(_vertices[z * 9 + x].uv.x * 255.f, 65535.f));
-        uv.y = static_cast<std::uint16_t>(std::min(_vertices[z * 9 + x].uv.y * 255.f, 65535.f));
+        uv.x = static_cast<std::uint16_t>(std::lround(std::min(_vertices[z * 9 + x].uv.x * 255.f, 65535.f)));
+        uv.y = static_cast<std::uint16_t>(std::lround(std::min(_vertices[z * 9 + x].uv.y * 255.f, 65535.f)));
 
         memcpy(adt.GetPointer<char>(current_pos).get(), &uv, sizeof(mh2o_uv));
         current_pos += sizeof(mh2o_uv);
@@ -373,7 +378,7 @@ void liquid_layer::save(util::sExtendableArray& adt, int base_pos, int& info_pos
     {
       for (int x = info.xOffset; x <= info.xOffset + info.width; ++x)
       {
-        std::uint8_t depth = static_cast<std::uint8_t>(std::min(_vertices[z * 9 + x].depth * 255.0f, 255.f));
+        std::uint8_t depth = static_cast<std::uint8_t>(std::lround(std::clamp(_vertices[z * 9 + x].depth * 255.0f, 0.f, 255.f)));
         memcpy(adt.GetPointer<char>(current_pos).get(), &depth, sizeof(std::uint8_t));
         current_pos += sizeof(std::uint8_t);
       }
@@ -444,7 +449,10 @@ bool liquid_layer::check_fatigue() const
 
 mclq liquid_layer::to_mclq(MH2O_Attributes& attributes) const
 {
-  mclq mclq_data;
+  // value-initialized: flow percentages, n_flowvs and flowvs are not
+  // written below, without the {} they end up as stack garbage in the
+  // saved file and every save produces different bytes
+  mclq mclq_data{};
 
   mclq_data.min_height = _minimum;
   mclq_data.max_height = _maximum;
@@ -469,17 +477,24 @@ mclq liquid_layer::to_mclq(MH2O_Attributes& attributes) const
 
   for (int i = 0; i < 9 * 9; ++i)
   {
+    // write the height unchanged, including the FLT_MAX sentinel of dry
+    // vertices: clamping to [_minimum, _maximum] rewrites it into a real
+    // height that lies outside of the stored header range once _minimum and
+    // _maximum are recomputed from the rendered vertices only, so the next
+    // load would clamp it further and every save would drift
     mclq_data.vertices[i].height = _vertices[i].position.y;
 
     // magma and slime
     if (_liquid_type == 2 || _liquid_type == 3)
     {
-      mclq_data.vertices[i].magma.x = static_cast<std::uint16_t>(std::min(_vertices[i].uv.x * 255.f, 65535.f));
-      mclq_data.vertices[i].magma.y = static_cast<std::uint16_t>(std::min(_vertices[i].uv.y * 255.f, 65535.f));
+      mclq_data.vertices[i].magma.x = static_cast<std::uint16_t>(std::lround(std::min(_vertices[i].uv.x * 255.f, 65535.f)));
+      mclq_data.vertices[i].magma.y = static_cast<std::uint16_t>(std::lround(std::min(_vertices[i].uv.y * 255.f, 65535.f)));
     }
     else
     {
-      mclq_data.vertices[i].water.depth = static_cast<std::uint8_t>(std::clamp(_vertices[i].depth * 255.f, 0.f, 255.f));
+      // round instead of truncate, otherwise the value ratchets down by
+      // one on every load/save (e.g. 201/255*255 truncates to 200)
+      mclq_data.vertices[i].water.depth = static_cast<std::uint8_t>(std::lround(std::clamp(_vertices[i].depth * 255.f, 0.f, 255.f)));
     }
   }
 

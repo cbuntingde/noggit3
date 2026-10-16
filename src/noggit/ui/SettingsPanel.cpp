@@ -2,6 +2,7 @@
 
 #include <noggit/ui/SettingsPanel.h>
 
+#include <noggit/client_profile.hpp>
 #include <noggit/settings.hpp>
 #include <noggit/TextureManager.h>
 #include <util/qt/overload.hpp>
@@ -88,6 +89,24 @@ namespace noggit
       browse_row (&wmvLogPathField, "WMV Log Path", "project/wmv_log_file", util::file_line_edit::files);
       browse_row (&mclq_liquids_export_path, "MCLQ Liquids Export Path", "project/mclq_liquids_path", util::file_line_edit::directories);
 
+      _client_version_combo = new QComboBox (this);
+      _client_version_combo->addItem
+        ( "Vanilla 1.12.1 (primary)"
+        , noggit::client_profile::to_string (noggit::client_profile::client_version::vanilla_1_12_1)
+        );
+      _client_version_combo->addItem
+        ( "WotLK 3.3.5a"
+        , noggit::client_profile::to_string (noggit::client_profile::client_version::wotlk_3_3_5a)
+        );
+      _client_version_combo->setToolTip ("Client file format used for loading and saving; auto-detected from the game path on startup. Requires a restart to take effect.");
+      layout->addRow ("Client Version", _client_version_combo);
+      connect ( _client_version_combo, static_cast<void (QComboBox::*) (int)> (&QComboBox::currentIndexChanged)
+              , [&]
+                {
+                  NoggitSettings.set_value ("project/client_version", _client_version_combo->currentData().toString());
+                }
+              );
+
       _mysql_box = new QGroupBox ("MySQL (uid storage)", this);
       _mysql_box->setToolTip ("Store the maps' max model unique id (uid) in a mysql database to sync your uids with different computers/users to avoid duplications");
       auto mysql_layout (new QFormLayout (_mysql_box));
@@ -169,6 +188,9 @@ namespace noggit
       _async_loader_thread_count->setMaximum(16);
 
       layout->addRow ("Always check for max UID", _uid_cb = new QCheckBox(this));
+      _uid_cb->setToolTip ("Scans every existing tile of a map for the highest object uid whenever the map is entered.\n"
+                           "This can freeze the editor for tens of seconds on large maps and is only needed for maps\n"
+                           "edited outside of noggit. When disabled the stored uid value is used directly.");
 
       layout->addRow ("Tablet support", tabletModeCheck = new QCheckBox(this));
 
@@ -223,6 +245,12 @@ namespace noggit
     void settings::discard_changes()
     {
       gamePathField->actual->setText (NoggitSettings.value ("project/game_path").toString());
+      _client_version_combo->setCurrentIndex
+        ( std::max ( 0
+                   , _client_version_combo->findData
+                       (noggit::client_profile::to_string (noggit::client_profile::current()))
+                   )
+        );
       projectPathField->actual->setText (NoggitSettings.value ("project/path").toString());
       importPathField->actual->setText (NoggitSettings.value ("project/import_file").toString());
       wmvLogPathField->actual->setText (NoggitSettings.value ("project/wmv_log_file").toString());
@@ -239,9 +267,9 @@ namespace noggit
       _adt_unload_check_interval->setValue(NoggitSettings.value("unload_interval", 5).toInt());
       _adt_loading_radius->setValue(NoggitSettings.value("loading_radius", 1).toInt());
       _async_loader_thread_count->setValue(NoggitSettings.value("async_thread_count", 1).toInt());
-      _uid_cb->setChecked(NoggitSettings.value("uid_startup_check", true).toBool());
+      _uid_cb->setChecked(NoggitSettings.value("uid_startup_check", noggit::client_profile::default_uid_startup_check (noggit::client_profile::current())).toBool());
       _additional_file_loading_log->setChecked(NoggitSettings.value("additional_file_loading_log", false).toBool());
-      _use_mclq_liquids_export->setChecked(NoggitSettings.value("use_mclq_liquids_export", false).toBool());
+      _use_mclq_liquids_export->setChecked(NoggitSettings.value("use_mclq_liquids_export", noggit::client_profile::default_mclq_export (noggit::client_profile::current())).toBool());
       _only_one_model_box->setChecked(NoggitSettings.value("only_one_model_box", true).toBool());
 
 #ifdef NOGGIT_HAS_SCRIPTING
@@ -264,6 +292,7 @@ namespace noggit
     void settings::save_changes()
     {
       NoggitSettings.set_value ("project/game_path", gamePathField->actual->text());
+      NoggitSettings.set_value ("project/client_version", _client_version_combo->currentData().toString());
       NoggitSettings.set_value ("project/path", projectPathField->actual->text());
       NoggitSettings.set_value ("project/import_file", importPathField->actual->text());
       NoggitSettings.set_value ("project/wmv_log_file", wmvLogPathField->actual->text());

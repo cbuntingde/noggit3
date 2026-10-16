@@ -1,6 +1,7 @@
 #include <noggit/ui/main_window.hpp>
 
 #include <noggit/bookmarks.hpp>
+#include <noggit/client_profile.hpp>
 #include <noggit/DBC.h>
 #include <noggit/DBCFile.h>
 #include <noggit/Log.h>
@@ -13,6 +14,9 @@
 #include <noggit/ui/uid_fix_window.hpp>
 #include <noggit/uid_storage.hpp>
 
+#include <cstdlib>
+
+#include <QtCore/QTimer>
 #include <QtGui/QCloseEvent>
 #include <QtWidgets/QHBoxLayout>
 #include <QtWidgets/QListWidget>
@@ -83,6 +87,20 @@ namespace noggit
                        );
 
       build_menu();
+
+      // automated testing hook: NOGGIT_ENTER_MAP=<mapID> enters a map
+      // at the center of tile 28,28 shortly after startup, so rendering
+      // can be checked without any user interaction
+      if (char const* auto_enter_map = std::getenv ("NOGGIT_ENTER_MAP"))
+      {
+        int const map_id (std::atoi (auto_enter_map));
+        NOGGIT_LOG << "NOGGIT_ENTER_MAP set, entering map " << map_id << " at tile 28-28 in 2 seconds." << std::endl;
+        QTimer::singleShot( 2000, this, [this, map_id]
+          {
+            loadMap (map_id);
+            check_uid_then_enter_map ( { 15200.f, 0.f, 15200.f }, math::degrees (30.f), math::degrees (90.f), false );
+          } );
+      }
     }
 
     void main_window::check_uid_then_enter_map
@@ -92,6 +110,18 @@ namespace noggit
                         , bool from_bookmark
                         )
     {
+      if (map_loaded || !_world)
+      {
+        // clicks already queued in the event queue can arrive after the
+        // editor was opened (map_loaded) or before a world was selected
+        LogDebug << "Entering map ignored ("
+          << (map_loaded ? "editor already open" : "no world loaded") << ")." << std::endl;
+        return;
+      }
+
+      LogDebug << "Entering map " << _world->getMapID()
+        << (from_bookmark ? " (from bookmark)." : ".") << std::endl;
+
 #ifdef USE_MYSQL_UID_STORAGE
       bool use_mysql = NoggitSettings.value("project/mysql/enabled", false).toBool();
 
@@ -105,12 +135,14 @@ namespace noggit
 #else
       if (uid_storage::hasMaxUIDStored(_world->getMapID()))
       {
-        if (NoggitSettings.value("uid_startup_check", true).toBool())
+        if (NoggitSettings.value("uid_startup_check", noggit::client_profile::default_uid_startup_check (noggit::client_profile::current())).toBool())
         {
+          LogDebug << "The max UID will be scanned when the map is entered (uid_startup_check is enabled)." << std::endl;
           enterMapAt(pos, camera_pitch, camera_yaw, uid_fix_mode::max_uid, from_bookmark);
         }
         else
         {
+          LogDebug << "Using the stored max UID (uid_startup_check is disabled)." << std::endl;
           _world->mapIndex.loadMaxUID();
           enterMapAt(pos, camera_pitch, camera_yaw, uid_fix_mode::none, from_bookmark);
         }
@@ -118,6 +150,8 @@ namespace noggit
 #endif
       else
       {
+        LogDebug << "No stored max UID for this map, asking how to fix uids." << std::endl;
+
         auto uidFixWindow(new uid_fix_window());
         uidFixWindow->show();
 
@@ -138,6 +172,17 @@ namespace noggit
                                  , bool from_bookmark
                                  )
     {
+      if (map_loaded || !_world)
+      {
+        // can happen when the (non modal) uid fix dialog is confirmed
+        // after the map was opened through another path already
+        LogDebug << "Opening the map editor ignored ("
+          << (map_loaded ? "editor already open" : "no world loaded") << ")." << std::endl;
+        return;
+      }
+
+      LogDebug << "Opening the map editor for map " << _world->getMapID() << "." << std::endl;
+
       auto mapview (new MapView (camera_yaw, camera_pitch, pos, this, std::move (_world), uid_fix, from_bookmark));
       connect(mapview, &MapView::uid_fix_failed, [this]() { prompt_uid_fix_failure(); });
 
@@ -148,6 +193,8 @@ namespace noggit
 
     void main_window::loadMap(int mapID)
     {
+      NOGGIT_LOG << "Loading map " << mapID << " for the preview." << std::endl;
+
       _minimap->world (nullptr);
 
       _world.reset();
@@ -158,6 +205,8 @@ namespace noggit
         {
           _world = std::make_unique<World> (it->getString(MapDB::InternalName), mapID);
           _minimap->world (_world.get());
+
+          NOGGIT_LOG << "Map " << mapID << " preview ready (click the minimap to enter the editor)." << std::endl;
 
           return;
         }

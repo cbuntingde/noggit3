@@ -206,9 +206,11 @@ INCLUDE_DIRECTORIES("${CMAKE_SOURCE_DIR}/src" )
 
 set ( noggit_root_sources
       src/noggit/AsyncLoader.cpp
+      src/noggit/adt_roundtrip.cpp
       src/noggit/bookmarks.cpp
       src/noggit/Brush.cpp
       src/noggit/chunk_mover.cpp
+      src/noggit/client_profile.cpp
       src/noggit/cursor_render.cpp
       src/noggit/DBC.cpp
       src/noggit/DBCFile.cpp
@@ -316,10 +318,12 @@ set ( noggit_root_headers
       src/noggit/Animated.h
       src/noggit/AsyncLoader.h
       src/noggit/AsyncObject.h
+      src/noggit/adt_roundtrip.hpp
       src/noggit/bookmarks.hpp
       src/noggit/Brush.h
       src/noggit/camera.hpp
       src/noggit/chunk_mover.hpp
+      src/noggit/client_profile.hpp
       src/noggit/cursor_render.hpp
       src/noggit/DBC.h
       src/noggit/DBCFile.h

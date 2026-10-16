@@ -1,5 +1,6 @@
 // This file is part of Noggit3, licensed under GNU General Public License (version 3).
 
+#include <noggit/client_profile.hpp>
 #include <noggit/DBC.h>
 #include <noggit/liquid_layer.hpp>
 #include <noggit/Log.h>
@@ -24,36 +25,73 @@ liquid_layer_ubo_data liquid_render::ubo_data(int liquid_id)
   {
     std::string filename;
     liquid_layer_ubo_data data;
-    try
-    {
-      DBCFile::Record lLiquidTypeRow = gLiquidTypeDB.getByID(liquid_id);
 
-      data.liquid_type = lLiquidTypeRow.getInt(LiquidTypeDB::Type);
-      data.param.x = lLiquidTypeRow.getFloat(LiquidTypeDB::AnimationX);
-      data.param.y = lLiquidTypeRow.getFloat(LiquidTypeDB::AnimationY);
-      data.param.z = 0.f;
-      data.param.w = 0.f;
-
-      // fix to not crash when using procedural water (id 100)
-      if (lLiquidTypeRow.getInt(LiquidTypeDB::ShaderType) == 3)
-      {
-        filename = "XTextures\\river\\lake_a.%d.blp";
-        // default param for water
-        data.param.x = 1.f;
-        data.param.y = 0.f;
-      }
-      else
-      {
-        filename = lLiquidTypeRow.getString(LiquidTypeDB::TextureFilenames);
-      }
-    }
-    catch (...)
+    if (noggit::client_profile::current() == noggit::client_profile::client_version::vanilla_1_12_1)
     {
-      // Fallback, when there is no information.
-      filename = "XTextures\\river\\lake_a.%d.blp";
+      // 1.12.1 has no texture names in LiquidType.dbc: the client resolves
+      // each liquid kind to a fixed animated texture set, and the wotlk
+      // shaped dbc fields only read garbage. ids: 1/13 = still,
+      // 2/14 = ocean, 3/15/19 = magma, 4/20/21 = slime
+      switch (liquid_id)
+      {
+        case 2:
+        case 14:
+          filename = "XTextures\\ocean\\ocean_h.%d.blp";
+          data.liquid_type = 1;
+          break;
+        case 3:
+        case 15:
+        case 19:
+          filename = "XTextures\\lava\\lava.%d.blp";
+          data.liquid_type = 2;
+          break;
+        case 4:
+        case 20:
+        case 21:
+          filename = "XTextures\\slime\\slime.%d.blp";
+          data.liquid_type = 3;
+          break;
+        default:
+          filename = "XTextures\\river\\lake_a.%d.blp";
+          data.liquid_type = 0;
+          break;
+      }
 
       data.param = math::vector_4d(1.f, 0.f, 0.f, 0.f);
-      data.liquid_type = 0;
+    }
+    else
+    {
+      try
+      {
+        DBCFile::Record lLiquidTypeRow = gLiquidTypeDB.getByID(liquid_id);
+
+        data.liquid_type = lLiquidTypeRow.getInt(LiquidTypeDB::Type);
+        data.param.x = lLiquidTypeRow.getFloat(LiquidTypeDB::AnimationX);
+        data.param.y = lLiquidTypeRow.getFloat(LiquidTypeDB::AnimationY);
+        data.param.z = 0.f;
+        data.param.w = 0.f;
+
+        // fix to not crash when using procedural water (id 100)
+        if (lLiquidTypeRow.getInt(LiquidTypeDB::ShaderType) == 3)
+        {
+          filename = "XTextures\\river\\lake_a.%d.blp";
+          // default param for water
+          data.param.x = 1.f;
+          data.param.y = 0.f;
+        }
+        else
+        {
+          filename = lLiquidTypeRow.getString(LiquidTypeDB::TextureFilenames);
+        }
+      }
+      catch (...)
+      {
+        // Fallback, when there is no information.
+        filename = "XTextures\\river\\lake_a.%d.blp";
+
+        data.param = math::vector_4d(1.f, 0.f, 0.f, 0.f);
+        data.liquid_type = 0;
+      }
     }
 
     filename = noggit::mpq::normalized_filename(filename);
@@ -63,11 +101,16 @@ liquid_layer_ubo_data liquid_render::ubo_data(int liquid_id)
     {
       std::string file = misc::replace(filename, "%d", std::to_string(i));
 
-      if (MPQFile::exists(file))
+      if (!MPQFile::exists(file))
       {
-        textures.emplace_back(file);
+        break;
       }
-      else
+
+      textures.emplace_back(file);
+
+      // a filename without the %d placeholder resolves to the same
+      // existing file on every iteration and would never terminate
+      if (file == filename)
       {
         break;
       }

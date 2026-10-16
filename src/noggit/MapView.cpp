@@ -58,6 +58,7 @@
 #include <QWidgetAction>
 
 #include <algorithm>
+#include <chrono>
 #include <cmath>
 #include <cstdlib>
 #include <fstream>
@@ -1616,10 +1617,19 @@ void MapView::initializeGL()
 
   if (_uid_fix == uid_fix_mode::max_uid)
   {
+    NOGGIT_LOG << "Scanning all tiles for the max uid (this can take a while)..." << std::endl;
+
+    auto const start (std::chrono::steady_clock::now());
     _world->mapIndex.searchMaxUID();
+
+    NOGGIT_LOG << "Max uid scan finished in "
+      << std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - start).count()
+      << " ms." << std::endl;
   }
   else if (_uid_fix == uid_fix_mode::fix_all_fail_on_model_loading_error)
   {
+    NOGGIT_LOG << "Fixing all uids..." << std::endl;
+
     auto result = _world->mapIndex.fixUIDs (_world.get(), true);
 
     if (result == uid_fix_status::failed)
@@ -1630,6 +1640,8 @@ void MapView::initializeGL()
   }
   else if (_uid_fix == uid_fix_mode::fix_all_fuckporting_edition)
   {
+    NOGGIT_LOG << "Fixing all uids (ignoring model loading errors)..." << std::endl;
+
     auto result = _world->mapIndex.fixUIDs (_world.get(), false);
 
     uid_warning = result == uid_fix_status::done_with_errors;
@@ -1645,6 +1657,8 @@ void MapView::initializeGL()
   {
     move_camera_with_auto_height (_camera.position);
   }
+
+  NOGGIT_LOG << "Map editor ready." << std::endl;
 
   if (uid_warning)
   {

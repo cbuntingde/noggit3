@@ -6,6 +6,7 @@
 
 #include <QtWidgets/QButtonGroup>
 #include <QtWidgets/QCheckBox>
+#include <QtWidgets/QComboBox>
 #include <QtWidgets/QDialog>
 #include <QtWidgets/QDoubleSpinBox>
 #include <QtWidgets/QGroupBox>
@@ -41,6 +42,7 @@ namespace noggit
       util::file_line_edit* importPathField;
       util::file_line_edit* wmvLogPathField;
       util::file_line_edit* mclq_liquids_export_path;
+      QComboBox* _client_version_combo;
       QDoubleSpinBox* _fov;
       QDoubleSpinBox* _view_distance;
       QSpinBox* _adt_unload_dist;

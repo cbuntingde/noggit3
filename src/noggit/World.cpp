@@ -3,6 +3,7 @@
 #include <noggit/World.h>
 
 #include <math/frustum.hpp>
+#include <noggit/AsyncLoader.h>
 #include <noggit/Brush.h> // brush
 #include <noggit/chunk_mover.hpp>
 #include <noggit/liquid_chunk.hpp>
@@ -112,6 +113,24 @@ World::World(const std::string& name, int map_id)
   , _view_distance(NoggitSettings.value ("view_distance", 1000.f).toFloat() + TILE_RADIUS) // add adt radius to make sure tiles aren't culled too soon, todo: improve adt culling to prevent that from happening
 {
   LogDebug << "Loading world \"" << name << "\"." << std::endl;
+}
+
+World::~World()
+{
+  LogDebug << "Unloading world \"" << basename << "\"." << std::endl;
+
+  // tiles, models and textures being loaded asynchronously hold pointers
+  // into this world; destroying the world while a loader thread is still
+  // using them is a use-after-free
+  if (AsyncLoader::instance)
+  {
+    AsyncLoader::instance->wait_queue_empty();
+  }
+
+  // the tiles are destroyed with mapIndex (member destruction), at which
+  // point the selection and the model storage may be gone already; their
+  // destructors must not touch this world anymore
+  _tearing_down = true;
 }
 
 bool World::is_selected(selection_type selection) const
@@ -2628,7 +2647,7 @@ void World::remove_models_if_needed(std::vector<uint32_t> const& uids)
   // todo: manage instances properly
   // don't unload anything during the uid fix all,
   // otherwise models spanning several adts will be unloaded too soon
-  if (mapIndex.uid_fix_all_in_progress())
+  if (_tearing_down || mapIndex.uid_fix_all_in_progress())
   {
     return;
   }

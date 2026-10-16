@@ -100,6 +100,7 @@ public:
   OutdoorLightStats outdoorLightStats;
 
   explicit World(const std::string& name, int map_id);
+  ~World();
 
   void initDisplay();
 
@@ -428,6 +429,9 @@ private:
   void update_models_by_filename();
 
   bool _need_wmo_liquid_update = true;
+
+  // set in ~World so tile destructors stop touching half-destroyed members
+  bool _tearing_down = false;
 
   bool _models_still_loading = true;
   int _last_unloaded_doodad_check = 0;

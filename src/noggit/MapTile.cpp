@@ -6,6 +6,7 @@
 #include <noggit/Misc.h>
 #include <noggit/ModelInstance.h> // ModelInstance
 #include <noggit/ModelManager.h> // ModelManager
+#include <noggit/client_profile.hpp>
 #include <noggit/liquid_tile.hpp>
 #include <noggit/settings.hpp>
 #include <noggit/WMOInstance.h> // WMOInstance
@@ -639,7 +640,7 @@ void MapTile::saveTile(World* world)
 {
   save(world, false);
 
-  if (NoggitSettings.value("use_mclq_liquids_export", false).toBool())
+  if (NoggitSettings.value("use_mclq_liquids_export", noggit::client_profile::default_mclq_export (noggit::client_profile::current())).toBool())
   {
     save(world, true);
   }
@@ -1024,7 +1025,7 @@ void MapTile::save(World* world, bool save_using_mclq_liquids)
 
     if (save_using_mclq_liquids)
     {
-      f.save_file_to_folder(NoggitSettings.value("project/mclq_liquids_path").toString().toStdString());
+      f.save_file_to_folder(noggit::client_profile::mclq_export_path().toStdString());
     }
     else
     {
