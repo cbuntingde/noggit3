@@ -1,254 +1,79 @@
-# LICENSE #
-This software is open source software licensed under GPL3, as found in
-the COPYING file.
+# noggit3 — WoW 1.12.1 map editor fork
 
-# DISCORD #
-You can follow Noggit's development and get the latest build here: https://discord.com/invite/UbdFHyM
+**Status: work in progress — not finished, not yet ready for general use.**
 
-# SCRIPTING #
-Noggit can be scripted using the Lua (5.1) programming language. See the [scripting documentation](scripts/docs/README.md).
+This is a fork of [wowdev/noggit3](https://github.com/wowdev/noggit3) being converted into a map editor for **World of Warcraft 1.12.1 (vanilla)** with working MCLQ water, and (planned) AI-assisted map generation from a text prompt.
 
-# BUILDING #
-This project requires CMake to be built. It also requires the
-following libraries:
+**This fork is modified for WoW 1.12.1 only — TBC and WotLK are no longer supported.**
 
-* OpenGL
-* Qt 5
+The original upstream README is preserved as [README.upstream.md](README.upstream.md).
 
-Further following libraries are required for MySQL GUID Storage builds:
+## Scope
 
-* LibMySQL
-* MySQLCPPConn
+- **WoW 1.12.1 (vanilla) only. TBC and WotLK are no longer supported**: not tested, not maintained, no effort will be made to keep them working, and bugs reported for them will not be fixed. When a choice would cost vanilla work to keep TBC/WotLK working, vanilla wins.
+- TBC/WotLK-era code paths remain in the tree as dormant dead weight (noggit's core is WotLK-shaped; vanilla rides the same infrastructure) but are never verified, maintained or debugged.
+- Tested against a vanilla 1.12.1 client with a **flat `Data\` layout** (`base.MPQ`, `dbc.MPQ`, `terrain.MPQ`, ... — no `enUS`-style locale subdirectories, `patch-*.MPQ` expanded at load).
 
-The following libraries are automatically installed:
-* StormLib (by Ladislav Zezula)
-* FastNoise2 (scripting only)
-* sol2 (scripting only)
-* lodepng (scripting only)
-* nlohmann/json (scripting only)
+## What works today (verified on a 1.12.1 client)
 
-## Windows ##
-Text in `<brackets>` below are up to your choice but shall be replaced
-with the same choice every time the same text is contained.
+- **Client profile detection**: recognizes a 1.12.1 install from its `Data\` layout, drives the MPQ archive list. Only WoW 1.12.1 is supported — the "Client Version" setting still lists other versions, but they are unsupported leftovers.
+- **Opening maps**: 1.12.1 ADTs load, terrain renders correctly, and you can fly around (tested over Westfall at a steady 59–60 FPS).
+- **MCLQ water renders.** A freeze/hang that occurred whenever liquid entered the view (vanilla `LiquidType.dbc` has no texture names, and the WotLK-shaped read produced garbage that triggered an unbounded loop) is fixed: each liquid kind resolves to its fixed 1.12.1 texture set.
+- **MCLQ save path exists** (export toggle + path in settings, vanilla nibble alpha format).
+- **Headless ADT round-trip tool** for regression testing: `noggit.exe --adt-roundtrip <mapID>` — currently round-trips all 687 Azeroth tiles cleanly.
 
-### MSVC++ ###
-Any recent version of Microsoft Visual C++ should work. Be sure to
-remember which version you chose as later on you will have to pick
-corresponding versions for other dependencies.
+## Known issues / still to do
 
-### CMake ###
-Any recent CMake version >= 3.18 should work. Just take the latest.
+- **M2 doodads partially fail to load** (vanilla M2 format support is not in yet) — some world props (haystacks, kobold cave clutter, ...) are missing and log `could not be loaded`. Planned for the vanilla-assets phase.
+- **Location/area names resolve incorrectly** (vanilla DBC layouts are not in yet) — e.g. "Tirisfal Glades" may be shown while you are over Westfall.
+- **Water rendering is rough** — the sea surface looks dark and flat at distance; MCLQ completeness (tile flags, min/max, liquid bits on save, vanilla UI) is still being worked through.
+- **AI map generation is not implemented yet** (design approved: multi-provider — OpenAI/OpenRouter/Ollama/LM Studio/Groq, Anthropic, Gemini — returning a validated JSON map spec rendered deterministically; auto-backup of touched ADTs before apply).
+- No undo system. Back up the ADTs you edit before bulk changes.
 
-### Qt5 ###
-Install Qt5 to `<Qt-install>`
+## Roadmap
 
-The recommended Qt version for noggit is 5.9, which can be downloaded from https://download.qt.io/new_archive/qt/5.9/5.9.9/qt-opensource-windows-x86-5.9.9.exe.
+| Phase | Content | Status |
+|---|---|---|
+| P0 | Toolchain, CMake build, runnable install dir | done |
+| P1 | Client profile (detection, per-profile MPQ list, flat-layout paths, MCLQ export settings) | done |
+| P2 | Vanilla ADT load/save audit, headless round-trip tool, liquid-render freeze fix | done |
+| P3 | MCLQ water completeness (tile flags, min/max, liquid bits on save, vanilla UI/render) | in progress |
+| P4 | Vanilla assets (DBC layouts, M2, WMO/MLIQ) | planned |
+| P5 | AI provider core (adapters + UI) | planned |
+| P6 | AI generation/apply (map spec, deterministic terrain generation, auto-backup) | planned |
 
-If you want to try a newer version, you can download the online installer from https://www.qt.io/download-open-source/#section-2.
+## Building (Windows — the known-good configuration for this fork)
 
-Note that during installation you only need **one** version of Qt and
-also only **one** compiler version. If download size is noticably large
-(more than a few hundred MB), you're probably downloading way too much.
-
-### LuaJIT ###
-_(Not necessary if disabling `NOGGIT_WITH_SCRIPTING`)_
-* Clone luajit to `<Lua-install>` using git: `git clone https://luajit.org/git/luajit.git`
-* Open up the visual studio command prompt (cmd / powershell does **NOT** work)
-  * The program is usually called something like "x64 Native Tools Command Prompt for VS 20xx"
-  * Usually enough to search for "x64 native" in the windows start menu
-  * It will open a command prompt that looks like the normal windows command prompt, but has a bunch of necessary visual studio variables set.
-* Navigate to the `<Lua-install>/src` (with the visual studio command prompt)
-* Run "msvcbuild.bat" (with the visual studio command prompt)
-* If successful, should give a message similar to `=== Successfully built LuaJIT for Windows/x64 ===`
-
-### Noggit ###
-* open CMake GUI
-* set `CMAKE_PREFIX_PATH` (path) to `"<Qt-install>"`,
-  e.g. `"C:/Qt/5.6/msvc2015"`
-* set `CMAKE_INSTALL_PREFIX` (path) to an empty destination, e.g. 
-  `"C:/Users/blurb/Documents/noggitinstall`
-* set `LUA_INCLUDE_DIR` to `<Lua-install>/src`
-* set `LUA_LIBRARY` to `<Lua-install>/src/lua51.lib`
-* configure, generate
-* open solution with visual studio
-* build ALL_BUILD
-* build INSTALL
-
-To launch noggit you will need the following DLLs from Qt loadable. Install
-them in the system, or copy them from `C:/Qt/X.X/msvcXXXX/bin` into the
-directory containing noggit.exe, i.e. `CMAKE_INSTALL_PREFIX` configured.
-
-* release: Qt5Core, Qt5OpenGL, Qt5Widgets, Qt5Gui
-* debug: Qt5Cored, Qt5OpenGLd, Qt5Widgetsd, Qt5Guid 
-
-* If using scripting, you will also need to copy `<Lua-install>/src/lua51.dll` to `CMAKE_INSTALL_PREFIX`
-
-## Linux ##
-
-These instructions assume a working directory `<Linux-Build>`, for example `/home/myuser/`
-
-### Dependencies ###
-
-On **Ubuntu** you can install the building requirements using:
+- **Qt 5.15.2 msvc2019_64** (qtbase-only archive is enough; no windeployqt)
+- **Visual Studio 2022** (v143 toolset) + its bundled CMake
+- Configure (from the repository root):
 
 ```bash
-sudo apt install freeglut3-dev qt5-default libsdl2-dev libbz2-dev
+cmake -S . -B build -G "Visual Studio 17 2022" -A x64 \
+  -DCMAKE_PREFIX_PATH=C:/Qt/5.15.2/msvc2019_64 \
+  -DCMAKE_INSTALL_PREFIX=C:/chris-dev/noggit3/build/install
 ```
 
-### LuaJIT ###
+- Build: `cmake --build build --config RelWithDebInfo --parallel`
+- Install: `cmake --install build --config RelWithDebInfo` → stage Qt DLLs (`Qt5Core/Gui/Widgets/OpenGL.dll` + `platforms/qwindows.dll`) into the install dir.
+- The exe must run from a directory containing `settings.ini` (it is read cwd-relative). Minimal settings:
 
-From `<Linux-Build>`, build luajit using:
-```bash
-git clone https://luajit.org/git/luajit.git
-cd luajit
-make
-sudo make install
-cd ..
+```ini
+[project]
+path=./program/
+game_path=C:/path/to/your/1.12.1/client
 ```
 
-`<Linux-Build>/luajit` should now exist.
+See [AGENTS.md](AGENTS.md) for the full build/deploy/smoke-verification recipe used for this fork.
 
-### Build Noggit ###
+## Verifying
 
-From `<Linux-Build>`, clone Noggit3 (change repo as needed):
-```bash
-git clone https://github.com/wowdev/noggit3
-```
+- Launch and auto-enter a map: set `NOGGIT_ENTER_MAP=0` (map id) before starting `noggit.exe`.
+- Headless ADT round-trip (no window, no GL context needed): `noggit.exe --adt-roundtrip 0` (optionally `--adt-roundtrip-tile <x>,<z>`). The report is written to `log.txt`.
+- `log.txt` (cwd-relative) flushes per line — an abruptly ending log marks a crash point.
 
-`<Linux-Build>/noggit3` should now exist.
+## Credits & license
 
-From `<Linux-Build>`, compile and build using the following commands. 
-Note that `<Linux-Build>` should be written as the **full** path in the commands below.
-For example: `cmake -DLUA_LIBRARIES=/home/myuser/luajit/src/libluajit.so -DLUA_INCLUDE_DIR=/home/myuser/luajit/src ../noggit3`
+Based on [noggit3](https://github.com/wowdev/noggit3) by the Noggit developers (StormLib by Ladislav Zezula, and others — see the upstream README).
 
-```bash
-mkdir build
-cd build
-cmake -DLUA_LIBRARIES=<Linux-Build>/luajit/src/libluajit.so -DLUA_INCLUDE_DIR=<Linux-Build>/luajit/src ../noggit3
-make -j $(nproc)
-```
-
-Instead of `make -j $(nproc)` you may want to pick a bigger number than
-`$(nproc)`, e.g. the number of `CPU cores * 1.5`.
-
-From `<Linux-Build>/build`, if the build pass correctly without errors, you can install the default lua scripts using:
-```bash
-cp -r ../noggit3/scripts ./bin/scripts
-```
-
-You can now go into `<Linux-Build>/build/bin` and run noggit.
-
-Note that `make install` will probably not work.
-
-# Building the Scripting documentation #
-To generate the scripting API documentation, install any new version of Node.js and run: 
-
-```
-npm i -g typedoc@0.20.28 typedoc-plugin-markdown@3.5.0 typescript@4.0
-```
-
-Then, enter the "scripting" directory in this repository and run the following commands:
-
-```
-typedoc --disableSources --plugin typedoc-plugin-markdown --hideBreadcrumbs --out docs/api global.d.ts
-rm docs/api/README.md
-```
-
-# DEVELOPMENT #
-Feel free to ask the owner of the official repository
-(https://github.com/wowdev/noggit3) for write access or
-fork and post a pull request.
-
-There is a bug tracker at https://github.com/wowdev/noggit3/issues which should be used.
-
-Discord, as linked above, may be used for communication.
-
-# CODING GUIDELINES #
-Following is an example for file `src/noggit/ui/foo_ban.hpp`. `.cpp` files
-are similar.
-
-```cpp
-// This file is part of Noggit3, licensed under GNU General Public License (version 3).
- 
-//! \note Include guard shall be using #pragma once
-#pragma once
- 
-//! \note Use fully qualified paths rather than "../relative". Order
-//! includes with own first, then external dependencies, then c++ STL.
-#include <noggit/bar.hpp>
- 
-//! \note Namespaces equal directories. (java style packages.)
-namespace noggit
-{
-  namespace ui
-  {
-    //! \note Lower case, underscore separated.
-    class foo_ban : public QWidget
-    {
-      Q_OBJECT;
- 
-    public:
-      //! \note Long parameter list. Would be more than 80 chars.
-      //! chars. Break with comma in front. Use spaces to be
-      //! aligned below the braces.
-      foo_ban ( type name
-              , type_2 const& name_2
-              , type const& name3
-              )
-        : QWidget (nullptr)
-      //! \note Prefer initialization lists over assignment.
-        , _var (std::move (name))
-      {}
-
-      //! \note Use const where possible. No space between name and
-      //! braces when no arguments are given.
-      void render() const;
- 
-      //! \note If you really need getters and setters, your design
-      //! might be broken. Please avoid them or consider just a
-      //! public data member, or use proper methods with semantics.
-      type const& var() const
-      {
-        return _var;
-      }
-      void var (type var_)
-      {
-        _var = std::move (var_);
-      }
- 
-      //! \note Prefer const where possible. If you need to copy, 
-      //! just take a `T`. Otherwise prefer taking a `T const&`.
-      //! Don't bother when it comes to tiny types.
-      baz_type count_some_numbers ( std::size_t begin
-                                   , std::size_t end
-                                   ) const
-      {
-        bazs_type bazs;
- 
-        //! \note Prefer construction over assignment. Prefer
-        //! preincrement.
-        for (size_t it (begin); it != end; ++it)
-        {
-          bazs.emplace_back (it);
-        }
- 
-        //! \note Prefer STL algorithms over hand written code.
-        assert (!bazs.empty());
-        auto const smallest
-          (std::min_element (bazs.begin(), bazs.end()));
- 
-        return *smallest;
-      }
-
-    private:
-      //! \note Member variables are prefixed with an underscore.
-      type _var;
-      //! \note Typedef when using complex types. Fully qualify
-      //! types.
-      using baz_type = type_2;
-      using bazs_type = std::vector<baz_type>;
-      bazs_type _bazs;
-    }
-  }
-}
-```
+This software is open source, licensed under **GPL3** — see the [COPYING](COPYING) file.
