@@ -160,60 +160,69 @@ void liquid_chunk::save(util::sExtendableArray& adt, int base_pos, int& header_p
   header_pos += sizeof(MH2O_Header);
 }
 
-void liquid_chunk::save_mclq(util::sExtendableArray& adt, int mcnk_pos, int& current_pos)
+int liquid_chunk::save_mclq(util::sExtendableArray& adt, int mcnk_pos, int& current_pos)
 {
   // remove empty layers
   cleanup();
   update_attributes();
 
-  if (hasData(0))
+  if (!hasData(0))
   {
-    adt.Extend(sizeof(mclq) * _layer_count + 8);
-    // size seems to be 0 in vanilla adts in the mclq chunk's header and set right in the mcnk header (layer_size * n_layer + 8)
-    SetChunkHeader(adt, current_pos, 'MCLQ', 0);
-
-    current_pos += 8;
-
-    // it's possible to merge layers when they don't overlap (liquids using the same vertice, but at different height)
-    // layer ordering seems to matter, having a lava layer then a river layer causes the lava layer to not render ingame
-    // sorting order seems to be dependant on the flag ordering in the mcnk's header
-    std::vector<std::pair<mclq, int>> mclq_layers;
-
-    for (liquid_layer const& layer : _layers)
-    {
-      switch (layer.mclq_liquid_type())
-      {
-      case 6: // lava
-        adt.GetPointer<MapChunkHeader>(mcnk_pos + 8)->flags.flags.lq_magma = 1;
-        break;
-      case 3: // slime
-        adt.GetPointer<MapChunkHeader>(mcnk_pos + 8)->flags.flags.lq_slime = 1;
-        break;
-      case 1: // ocean
-        adt.GetPointer<MapChunkHeader>(mcnk_pos + 8)->flags.flags.lq_ocean = 1;
-        break;
-      default: // river
-        adt.GetPointer<MapChunkHeader>(mcnk_pos + 8)->flags.flags.lq_river = 1;
-        break;
-      }
-
-      mclq_layers.push_back({ layer.to_mclq(attributes), layer.mclq_flag_ordering() });
-    }
-
-    auto cmp = [](std::pair<mclq, int> const& a, std::pair<mclq, int> const& b)
-    {
-      return a.second < b.second;
-    };
-
-    // sort the layers by flag order
-    std::sort(mclq_layers.begin(), mclq_layers.end(), cmp);
-
-    for (auto const& mclq_layer : mclq_layers)
-    {
-      std::memcpy(adt.GetPointer<char>(current_pos).get(), &mclq_layer.first, sizeof(mclq));
-      current_pos += sizeof(mclq);
-    }
+    return 0;
   }
+
+  // size the chunk from the layers actually written (cleanup just dropped the
+  // empty ones) so the mcnk header size always matches the serialized bytes
+  int const stored_layers = static_cast<int>(_layers.size());
+  int const chunk_size = 8 + stored_layers * static_cast<int>(sizeof(mclq));
+
+  adt.Extend(chunk_size);
+  // size seems to be 0 in vanilla adts in the mclq chunk's header and set right in the mcnk header (layer_size * n_layer + 8)
+  SetChunkHeader(adt, current_pos, 'MCLQ', 0);
+
+  current_pos += 8;
+
+  // it's possible to merge layers when they don't overlap (liquids using the same vertice, but at different height)
+  // layer ordering seems to matter, having a lava layer then a river layer causes the lava layer to not render ingame
+  // sorting order seems to be dependant on the flag ordering in the mcnk's header
+  std::vector<std::pair<mclq, int>> mclq_layers;
+
+  for (liquid_layer const& layer : _layers)
+  {
+    switch (layer.mclq_liquid_type())
+    {
+    case 6: // lava
+      adt.GetPointer<MapChunkHeader>(mcnk_pos + 8)->flags.flags.lq_magma = 1;
+      break;
+    case 3: // slime
+      adt.GetPointer<MapChunkHeader>(mcnk_pos + 8)->flags.flags.lq_slime = 1;
+      break;
+    case 1: // ocean
+      adt.GetPointer<MapChunkHeader>(mcnk_pos + 8)->flags.flags.lq_ocean = 1;
+      break;
+    default: // river
+      adt.GetPointer<MapChunkHeader>(mcnk_pos + 8)->flags.flags.lq_river = 1;
+      break;
+    }
+
+    mclq_layers.push_back({ layer.to_mclq(attributes), layer.mclq_flag_ordering() });
+  }
+
+  auto cmp = [](std::pair<mclq, int> const& a, std::pair<mclq, int> const& b)
+  {
+    return a.second < b.second;
+  };
+
+  // sort the layers by flag order
+  std::sort(mclq_layers.begin(), mclq_layers.end(), cmp);
+
+  for (auto const& mclq_layer : mclq_layers)
+  {
+    std::memcpy(adt.GetPointer<char>(current_pos).get(), &mclq_layer.first, sizeof(mclq));
+    current_pos += sizeof(mclq);
+  }
+
+  return chunk_size;
 }
 
 void liquid_chunk::copy_data(noggit::chunk_data& data) const

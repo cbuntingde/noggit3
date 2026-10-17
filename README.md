@@ -64,7 +64,7 @@ path=./program/
 game_path=C:/path/to/your/1.12.1/client
 ```
 
-See [AGENTS.md](AGENTS.md) for the full build/deploy/smoke-verification recipe used for this fork.
+See the [Verifying](#verifying) section below for the round-trip and smoke checks used for this fork. The install directory must contain `Qt5Core.dll`, `Qt5Gui.dll`, `Qt5Widgets.dll`, `Qt5OpenGL.dll` and the `platforms/qwindows.dll` plugin next to `noggit.exe`.
 
 ## Verifying
 

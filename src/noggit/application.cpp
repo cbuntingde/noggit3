@@ -47,6 +47,17 @@
 
 #include "revision.h"
 
+namespace
+{
+  // thrown by the headless command modes (--adt-roundtrip, --asset-check,
+  // --extract) to unwind out of Noggit's constructor so main can return the
+  // status code; std::exit would skip destructors (Qt cleanup included)
+  struct headless_exit
+  {
+    int code;
+  };
+}
+
 class Noggit
 {
 public:
@@ -447,7 +458,7 @@ Noggit::Noggit(int argc, char *argv[])
 
     NOGGIT_LOG << "asset-check: " << loaded << " ok, " << failures << " failed." << std::endl;
 
-    std::exit (failures ? 1 : 0);
+    throw headless_exit{failures ? 1 : 0};
   }
 
   // dump files from the client archives to disk; used to get ground truth
@@ -470,7 +481,7 @@ Noggit::Noggit(int argc, char *argv[])
       extracted.save_file (output_path);
     }
 
-    std::exit (failures ? 1 : 0);
+    throw headless_exit{failures ? 1 : 0};
   }
 
   if (roundtrip_map_id >= 0)
@@ -489,10 +500,10 @@ Noggit::Noggit(int argc, char *argv[])
     if (map_name.empty())
     {
       LogError << "adt_roundtrip: map id " << roundtrip_map_id << " does not exist in Map.dbc." << std::endl;
-      std::exit (1);
+      throw headless_exit{1};
     }
 
-    std::exit (noggit::run_adt_roundtrip (map_name, roundtrip_map_id, roundtrip_tile_x, roundtrip_tile_z));
+    throw headless_exit{noggit::run_adt_roundtrip (map_name, roundtrip_map_id, roundtrip_tile_x, roundtrip_tile_z)};
   }
 
   if (!QGLFormat::hasOpenGL())
@@ -598,7 +609,14 @@ int main(int argc, char *argv[])
   qapp.setApplicationName ("Noggit");
   qapp.setOrganizationName ("Noggit");
 
-  Noggit app (argc, argv);
+  try
+  {
+    Noggit app (argc, argv);
 
-  return qapp.exec();
+    return qapp.exec();
+  }
+  catch (headless_exit const& headless)
+  {
+    return headless.code;
+  }
 }

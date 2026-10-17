@@ -1010,6 +1010,11 @@ void liquid_layer::update_vertex_opacity(int x, int z, MapChunk* chunk, float fa
 {
   float diff = _vertices[z * 9 + x].position.y - chunk->vertices[z * 17 + x].position.y;
   _vertices[z * 9 + x].depth = std::clamp((diff + 1.0f) * factor, 0.f, 1.f);
+
+  // an explicit edit overrides the depth the loader zeroed for rendering, so
+  // the raw stored byte is no longer authoritative for this vertex: without
+  // this, editing the depth back to 0 would silently save the old byte
+  _render_zeroed_depth[z * 9 + x] = 0;
 }
 
 int liquid_layer::get_lod_level(math::vector_3d const& camera_pos) const

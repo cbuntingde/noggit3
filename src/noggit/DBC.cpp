@@ -148,7 +148,7 @@ std::string  LiquidTypeDB::getLiquidName(int pID)
     LiquidTypeDB::Record rec = gLiquidTypeDB.getByID(pID);
     type = std::string(rec.getString(LiquidTypeDB::Name));
   }
-  catch (MapDB::NotFound)
+  catch (LiquidTypeDB::NotFound)
   {
     type = "Unknown type";
   }

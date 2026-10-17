@@ -359,6 +359,13 @@ void Model::load_vanilla_defs(const MPQFile& f)
     ModelParticleEmitterDefVanilla const& v = vparticles[i];
     ModelParticleEmitterDef& emitter = _vanilla_particle_defs[i];
 
+    // classic emitters keep their particle parameters inline and they are not
+    // mapped onto the wotlk-shaped ModelParticleParams yet; zero them
+    // explicitly so the values the particle system reads (notably slowdown)
+    // are deterministic rather than dependent on how the vector element was
+    // default-constructed
+    emitter.p = ModelParticleParams{};
+
     emitter.id = v.id;
     emitter.flags = v.flags;
     emitter.pos = v.pos;

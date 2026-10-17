@@ -1857,7 +1857,11 @@ void MapChunk::save( util::sExtendableArray &lADTFile
   // MCSH
   if (!shadow_map_is_empty())
   {
+    // the header flags were copied to the output buffer earlier, before the
+    // shadow state was known; keep both copies in sync so the written chunk
+    // actually advertises the MCSH data it contains
     header.flags.flags.has_mcsh = 1;
+    header_ptr->flags.flags.has_mcsh = 1;
 
     int lMCSH_Size = 0x200;
     lADTFile.Extend(8 + lMCSH_Size);
@@ -1876,6 +1880,7 @@ void MapChunk::save( util::sExtendableArray &lADTFile
   else
   {
     header.flags.flags.has_mcsh = 0;
+    header_ptr->flags.flags.has_mcsh = 0;
     header_ptr->ofsShadow = 0;
     header_ptr->sizeShadow = 0;
   }
@@ -1903,17 +1908,19 @@ void MapChunk::save( util::sExtendableArray &lADTFile
   {
     auto liquids = liquid_chunk();
 
-    if (liquids && liquids->displayed_layer_count() > 0)
+    // the declared offset/size must describe exactly the bytes save_mclq
+    // writes; that is the stored layer count after empty layers are dropped,
+    // not the displayed layer count, which may include script preview layers
+    int const mclq_pos = lCurrentPosition - lMCNK_Position;
+    int const mclq_size = liquids
+                        ? liquids->save_mclq(lADTFile, lMCNK_Position, lCurrentPosition)
+                        : 0;
+
+    if (mclq_size > 0)
     {
-      int liquids_size = 8 + liquids->displayed_layer_count() * sizeof(mclq);
-
-      lMCNK_Size += liquids_size;
-
-      header_ptr->sizeLiquid = liquids_size;
-      header_ptr->ofsLiquid = lCurrentPosition - lMCNK_Position;
-
-      // current position updated inside
-      liquids->save_mclq(lADTFile, lMCNK_Position, lCurrentPosition);
+      header_ptr->sizeLiquid = mclq_size;
+      header_ptr->ofsLiquid = mclq_pos;
+      lMCNK_Size += mclq_size;
     }
     // no liquid, vanilla adt still have an empty chunk
     else
@@ -1923,7 +1930,7 @@ void MapChunk::save( util::sExtendableArray &lADTFile
       SetChunkHeader(lADTFile, lCurrentPosition, 'MCLQ', 0);
 
       header_ptr->sizeLiquid = 8;
-      header_ptr->ofsLiquid = lCurrentPosition - lMCNK_Position;
+      header_ptr->ofsLiquid = mclq_pos;
 
       // clear MCLQ liquid flags (0x4, 0x8, 0x10, 0x20)
       header_ptr->flags.value &= 0xFFFFFFC3;

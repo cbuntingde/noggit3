@@ -51,6 +51,11 @@ class World
 private:
   int _model_display_mode = 0;
 
+  // set in ~World so tile destructors stop touching half-destroyed members;
+  // declared before mapIndex (which owns the tiles) so it is destroyed after
+  // them, not before
+  bool _tearing_down = false;
+
   std::vector<WMOInstance*> _wmos_with_skybox;
   std::unordered_map<std::string, std::vector<WMOInstance*>> _wmos_by_filename;
   std::unordered_map<std::string, std::vector<ModelInstance*>> _models_by_filename;
@@ -429,9 +434,6 @@ private:
   void update_models_by_filename();
 
   bool _need_wmo_liquid_update = true;
-
-  // set in ~World so tile destructors stop touching half-destroyed members
-  bool _tearing_down = false;
 
   bool _models_still_loading = true;
   int _last_unloaded_doodad_check = 0;

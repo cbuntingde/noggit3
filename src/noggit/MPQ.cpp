@@ -249,18 +249,21 @@ bool MPQFile::existsOnDisk (std::string const& filename)
 
 size_t MPQFile::read(void* dest, size_t bytes)
 {
-  if (eof || !bytes)
+  if (eof || !bytes || pointer >= buffer.size())
     return 0;
 
-  size_t rpos = pointer + bytes;
-  if (rpos > buffer.size()) {
-    bytes = buffer.size() - pointer;
+  size_t const available = buffer.size() - pointer;
+  if (bytes > available)
+  {
+    bytes = available;
     eof = true;
   }
 
-  memcpy(dest, &(buffer[pointer]), bytes);
+  std::memcpy(dest, buffer.data() + pointer, bytes);
 
-  pointer = rpos;
+  // never advance past the end: a read at the end returns 0 and must leave the
+  // cursor in a valid position
+  pointer += bytes;
 
   return bytes;
 }
