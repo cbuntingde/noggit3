@@ -14,6 +14,7 @@
 #include <QtOpenGL/QGLPixelBuffer>
 
 #include <algorithm>
+#include <stdexcept>
 
 std::atomic<int> blp_texture::blp_tex_counter = {0};
 
@@ -162,8 +163,12 @@ GLuint64 blp_texture::get_resident_handle()
 }
 #endif
 
-void blp_texture::loadFromUncompressedData(BLPHeader const* lHeader, char const* lData)
+void blp_texture::loadFromUncompressedData(BLPHeader const* lHeader, char const* lData, size_t file_size)
 {
+  if (file_size < sizeof(BLPHeader) + 256U * sizeof(std::uint32_t))
+  {
+    throw std::runtime_error ("BLP is truncated.");
+  }
   unsigned int const* pal = reinterpret_cast<unsigned int const*>(lData + sizeof(BLPHeader));
 
   unsigned char const* buf;
@@ -172,6 +177,10 @@ void blp_texture::loadFromUncompressedData(BLPHeader const* lHeader, char const*
   unsigned char const* a;
 
   int alphabits = lHeader->attr_1_alphadepth;
+  if (alphabits != 0 && alphabits != 1 && alphabits != 8)
+  {
+    throw std::runtime_error ("BLP has unsupported alpha depth.");
+  }
   bool hasalpha = alphabits != 0;
 
   int width = _width, height = _height;
@@ -183,18 +192,37 @@ void blp_texture::loadFromUncompressedData(BLPHeader const* lHeader, char const*
 
     if (lHeader->offsets[i] > 0 && lHeader->sizes[i] > 0)
     {
+      std::uint64_t const ofs = static_cast<std::uint64_t>(lHeader->offsets[i]);
+      std::uint64_t const size = static_cast<std::uint64_t>(lHeader->sizes[i]);
+      if (ofs >= file_size || size > file_size - ofs || size > 64ULL * 1024ULL * 1024ULL)
+      {
+        throw std::runtime_error ("BLP mipmap is out of bounds.");
+      }
+      std::uint64_t const need = static_cast<std::uint64_t>(width) * static_cast<std::uint64_t>(height) * 2ULL;
+      unsigned char const* const file_begin = reinterpret_cast<unsigned char const*>(lData);
+      unsigned char const* const pal_bytes = reinterpret_cast<unsigned char const*>(pal);
+      std::uint64_t const tail = static_cast<std::uint64_t>(file_begin + file_size - pal_bytes);
+      if (tail < need)
+      {
+        throw std::runtime_error ("BLP mipmap exceeds file.");
+      }
       buf = reinterpret_cast<unsigned char const*>(&lData[lHeader->offsets[i]]);
 
-      std::vector<uint32_t> data(lHeader->sizes[i]);
+      std::vector<uint32_t> data(static_cast<size_t>(lHeader->sizes[i]));
 
       int cnt = 0;
       p = data.data();
       c = buf;
       a = buf + width*height;
+      unsigned char const* const buf_end = buf + size;
       for (int y = 0; y<height; y++)
       {
         for (int x = 0; x<width; x++)
         {
+          if (c >= buf_end || a >= buf_end)
+          {
+            throw std::runtime_error ("BLP mipmap is truncated.");
+          }
           unsigned int k = pal[*c++];
           k = ((k & 0x00FF0000) >> 16) | ((k & 0x0000FF00)) | ((k & 0x000000FF) << 16);
           int alpha = 0xFF;
@@ -215,7 +243,7 @@ void blp_texture::loadFromUncompressedData(BLPHeader const* lHeader, char const*
             }
           }
 
-          k |= alpha << 24;
+          k |= static_cast<unsigned int>(alpha) << 24;
           *p++ = k;
         }
       }
@@ -232,13 +260,17 @@ void blp_texture::loadFromUncompressedData(BLPHeader const* lHeader, char const*
   }
 }
 
-void blp_texture::loadFromCompressedData(BLPHeader const* lHeader, char const* lData)
+void blp_texture::loadFromCompressedData(BLPHeader const* lHeader, char const* lData, size_t file_size)
 {
   //                         0 (0000) & 3 == 0                1 (0001) & 3 == 1                    7 (0111) & 3 == 3
   const int alphatypes[] = { GL_COMPRESSED_RGB_S3TC_DXT1_EXT, GL_COMPRESSED_RGBA_S3TC_DXT3_EXT, 0, GL_COMPRESSED_RGBA_S3TC_DXT5_EXT };
   const int blocksizes[] = { 8, 16, 0, 16 };
 
   int alpha_type = lHeader->attr_2_alphatype & 3;
+  if (blocksizes[alpha_type] == 0)
+  {
+    throw std::runtime_error ("BLP has unsupported alpha type.");
+  }
   GLint format = alphatypes[alpha_type];
   _compression_format = format == GL_COMPRESSED_RGB_S3TC_DXT1_EXT ? (lHeader->attr_1_alphadepth == 1 ? GL_COMPRESSED_RGBA_S3TC_DXT1_EXT : GL_COMPRESSED_RGB_S3TC_DXT1_EXT) : format;
 
@@ -251,16 +283,23 @@ void blp_texture::loadFromCompressedData(BLPHeader const* lHeader, char const* l
       return;
     }
 
-    // make sure the vector is of the right size, blizzard seems to fuck those up for some small mipmaps
-    int size = std::floor((width + 3) / 4) * std::floor((height + 3) / 4) * blocksizes[alpha_type];
+    std::uint64_t const ofs = static_cast<std::uint64_t>(lHeader->offsets[i]);
+    std::uint64_t const size = static_cast<std::uint64_t>(lHeader->sizes[i]);
+    if (ofs >= file_size || size > file_size - ofs || size > 64ULL * 1024ULL * 1024ULL)
+    {
+      throw std::runtime_error ("BLP mipmap is out of bounds.");
+    }
 
-    if (size < lHeader->sizes[i])
+    // make sure the vector is of the right size, blizzard seems to fuck those up for some small mipmaps
+    int size_expected = std::floor((width + 3) / 4) * std::floor((height + 3) / 4) * blocksizes[alpha_type];
+
+    if (size_expected < lHeader->sizes[i])
     {
       LogDebug << "mipmap size mismatch in '" << filename << "'" << std::endl;
       return;
     }
 
-    _compressed_data[i].resize(size);
+    _compressed_data[i].resize(static_cast<size_t>(size_expected));
 
     char const* start = lData + lHeader->offsets[i];
     std::copy(start, start + lHeader->sizes[i], _compressed_data[i].begin());
@@ -290,39 +329,59 @@ void blp_texture::finishLoading()
     finished = true;
     throw std::runtime_error ("File " + filename + " does not exists");
   }
+  if (f.getSize() < sizeof(BLPHeader))
+  {
+    finished = true;
+    throw std::runtime_error ("BLP file " + filename + " is truncated.");
+  }
 
   char const* lData = f.getPointer();
   BLPHeader const* lHeader = reinterpret_cast<BLPHeader const*>(lData);
+  if (lHeader->resx <= 0 || lHeader->resx > 4096 || lHeader->resy <= 0 || lHeader->resy > 4096)
+  {
+    finished = true;
+    throw std::runtime_error ("BLP file " + filename + " has invalid dimensions.");
+  }
   _width = lHeader->resx;
   _height = lHeader->resy;
 
   if (lHeader->attr_0_compression == 1)
   {
-    loadFromUncompressedData(lHeader, lData);
+    loadFromUncompressedData(lHeader, lData, f.getSize());
     _layer_count = _data.size();
   }
   else if (lHeader->attr_0_compression == 2)
   {
-    loadFromCompressedData(lHeader, lData);
+    loadFromCompressedData(lHeader, lData, f.getSize());
     _layer_count = _compressed_data.size();
   }
   else
   {
     MPQFile fallback("textures/shanecube.blp");
 
+    if (fallback.getSize() < sizeof(BLPHeader))
+    {
+      finished = true;
+      throw std::runtime_error ("Fallback BLP is truncated.");
+    }
     char const* lData_f = fallback.getPointer();
     BLPHeader const* lHeader_f = reinterpret_cast<BLPHeader const*>(lData_f);
+    if (lHeader_f->resx <= 0 || lHeader_f->resx > 4096 || lHeader_f->resy <= 0 || lHeader_f->resy > 4096)
+    {
+      finished = true;
+      throw std::runtime_error ("Fallback BLP has invalid dimensions.");
+    }
     _width = lHeader_f->resx;
     _height = lHeader_f->resy;
 
     if (lHeader_f->attr_0_compression == 1)
     {
-      loadFromUncompressedData(lHeader_f, lData_f);
+      loadFromUncompressedData(lHeader_f, lData_f, fallback.getSize());
       _layer_count = _data.size();
     }
     else if (lHeader_f->attr_0_compression == 2)
     {
-      loadFromCompressedData(lHeader_f, lData_f);
+      loadFromCompressedData(lHeader_f, lData_f, fallback.getSize());
       _layer_count = _compressed_data.size();
     }
     else

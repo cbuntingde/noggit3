@@ -40,9 +40,16 @@ struct scoped_model_reference
   {}
   scoped_model_reference& operator= (scoped_model_reference const& other)
   {
-    _valid = other._valid;
-    _filename = other._filename;
-    _model = ModelManager::_.emplace (_filename);
+    if (this != &other)
+    {
+      if (_valid)
+      {
+        ModelManager::_.erase (_filename);
+      }
+      _valid = other._valid;
+      _filename = other._filename;
+      _model = _valid ? ModelManager::_.emplace (_filename) : nullptr;
+    }
     return *this;
   }
 

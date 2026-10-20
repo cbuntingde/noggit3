@@ -4,6 +4,7 @@
 #include <noggit/scripting/script_filesystem.hpp>
 #include <noggit/scripting/scripting_tool.hpp>
 #include <noggit/scripting/script_context.hpp>
+#include <noggit/settings.hpp>
 #include <noggit/ui/SettingsPanel.h>
 
 #include <QtWidgets/QMessageBox>
@@ -28,13 +29,70 @@ namespace noggit
       }
     }
 
-    std::string read_file(std::string const& path)
+    namespace
     {
-      if (!fs::exists(path))
+      bool path_is_within (fs::path const& candidate, fs::path const& root)
       {
-        throw script_exception("read_file","no such file:" + std::string (path));
+        auto candidate_it (candidate.begin());
+        auto root_it (root.begin());
+        for (; root_it != root.end(); ++root_it, ++candidate_it)
+        {
+          if (candidate_it == candidate.end() || *candidate_it != *root_it)
+          {
+            return false;
+          }
+        }
+        return true;
       }
-      std::ifstream t(path);
+
+      fs::path canonicalize (std::string const& path)
+      {
+        std::error_code ec;
+        // weakly_canonical resolves ".." and symlinks where possible without
+        // requiring the path to exist; absolute anchors relative paths at cwd
+        return fs::weakly_canonical (fs::absolute (fs::path (path)), ec);
+      }
+
+      //! Scripts may only read inside the scripts tree (including the
+      //! directory of the running script) and the open WoW project.
+      //! Anything else (home dir, credentials, other projects) is denied.
+      bool is_readable_path (script_context* state, fs::path const& canonical)
+      {
+        try
+        {
+          if (path_is_within (canonical, canonicalize ("scripts"))
+            || path_is_within (canonical, canonicalize (state->current_script_dir()))
+            || path_is_within (canonical, canonicalize (NoggitSettings.project_path())))
+          {
+            return true;
+          }
+        }
+        catch (...)
+        {
+        }
+        return false;
+      }
+
+      fs::path get_readable_path (std::string const& caller, script_context* state, std::string const& path)
+      {
+        std::error_code ec;
+        fs::path const canonical (fs::weakly_canonical (fs::absolute (fs::path (path)), ec));
+        if (ec || !is_readable_path (state, canonical))
+        {
+          throw script_exception (caller, "reading outside the scripts and project directories is not allowed: " + path);
+        }
+        return canonical;
+      }
+    }
+
+    std::string read_file(script_context* ctx, std::string const& path)
+    {
+      auto readable (get_readable_path ("read_file", ctx, path));
+      if (!fs::exists(readable))
+      {
+        throw script_exception("read_file","no such file:" + path);
+      }
+      std::ifstream t(readable);
       std::string str((std::istreambuf_iterator<char>(t)),
               std::istreambuf_iterator<char>());
       return str;
@@ -84,9 +142,17 @@ namespace noggit
       outfile << input;
     }
 
-    bool path_exists(std::string const& path)
+    bool path_exists(script_context* ctx, std::string const& path)
     {
-      return fs::exists(path);
+      // Outside the sandbox the file is simply not visible; this also
+      // closes the existence oracle without raising script errors.
+      std::error_code ec;
+      fs::path const canonical (fs::weakly_canonical (fs::absolute (fs::path (path)), ec));
+      if (ec || !is_readable_path (ctx, canonical))
+      {
+        return false;
+      }
+      return fs::exists(canonical, ec) && !ec;
     }
 
     void register_filesystem(script_context * state)
@@ -103,8 +169,12 @@ namespace noggit
         ) {
           append_file(state, path, input);
         });
-      state->set_function("read_file",read_file);
-      state->set_function("path_exists",path_exists);
+      state->set_function("read_file", [state](std::string const& path) {
+        return read_file(state, path);
+      });
+      state->set_function("path_exists", [state](std::string const& path) {
+        return path_exists(state, path);
+      });
     }
   } // namespace scripting
 } // namespace noggit

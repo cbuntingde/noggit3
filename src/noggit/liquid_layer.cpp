@@ -9,6 +9,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <stdexcept>
 #include <string>
 
 namespace
@@ -136,6 +137,16 @@ liquid_layer::liquid_layer(MPQFile &f, std::size_t base_pos, math::vector_3d con
   , _subchunks(0)
   , pos(base)
 {
+  if (info.width > 8 || info.height > 8 || info.xOffset > 8 || info.yOffset > 8
+    || info.xOffset + info.width > 8 || info.yOffset + info.height > 8)
+  {
+    throw std::out_of_range ("liquid_layer: info extents out of range.");
+  }
+  if (_liquid_vertex_format > 2)
+  {
+    throw std::runtime_error ("liquid_layer: unsupported vertex format.");
+  }
+
   int offset = 0;
   for (int z = 0; z < info.height; ++z)
   {
@@ -159,7 +170,10 @@ liquid_layer::liquid_layer(MPQFile &f, std::size_t base_pos, math::vector_3d con
         for (int x = info.xOffset; x <= info.xOffset + info.width; ++x)
         {
           float h;
-          f.read(&h, sizeof(float));
+          if (f.read(&h, sizeof(float)) != sizeof(float))
+          {
+            throw std::runtime_error ("liquid_layer: truncated height map.");
+          }
 
           _vertices[z * 9 + x].position.y = std::clamp(h, _minimum, _maximum);
         }
@@ -173,7 +187,10 @@ liquid_layer::liquid_layer(MPQFile &f, std::size_t base_pos, math::vector_3d con
         for (int x = info.xOffset; x <= info.xOffset + info.width; ++x)
         {
           mh2o_uv uv;
-          f.read(&uv, sizeof(mh2o_uv));
+          if (f.read(&uv, sizeof(mh2o_uv)) != sizeof(mh2o_uv))
+          {
+            throw std::runtime_error ("liquid_layer: truncated uv map.");
+          }
 
           _vertices[z * 9 + x].uv =
             { static_cast<float>(uv.x) / 255.f
@@ -190,7 +207,10 @@ liquid_layer::liquid_layer(MPQFile &f, std::size_t base_pos, math::vector_3d con
         for (int x = info.xOffset; x <= info.xOffset + info.width; ++x)
         {
           std::uint8_t depth;
-          f.read(&depth, sizeof(std::uint8_t));
+          if (f.read(&depth, sizeof(std::uint8_t)) != sizeof(std::uint8_t))
+          {
+            throw std::runtime_error ("liquid_layer: truncated depth map.");
+          }
           _vertices[z * 9 + x].depth = static_cast<float>(depth) / 255.f;
         }
       }

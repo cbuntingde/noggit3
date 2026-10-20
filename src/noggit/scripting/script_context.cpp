@@ -181,5 +181,15 @@ namespace noggit
         : create_table();
       _file_stack.pop_back();
     }
+
+    std::string script_context::current_script_dir()
+    {
+      if (_file_stack.empty())
+      {
+        return "scripts";
+      }
+      auto parent (std::filesystem::path (module_to_file (_file_stack.back())).parent_path());
+      return parent.empty() ? "scripts" : parent.string();
+    }
   } // namespace scripting
 } // namespace noggit

@@ -136,9 +136,21 @@ namespace opengl
     template<std::size_t count>
       deferred_upload_buffers<count>::~deferred_upload_buffers()
     {
+      // Never call GL directly here: owners (Model, WMO) may be destroyed
+      // on any thread with no GL context current, where deleteBuffers
+      // throws. The render loop runs the queued deletion.
       if (_buffer_generated)
       {
-        gl.deleteBuffers (count, _buffers);
+        std::array<GLuint, count> ids;
+        for (std::size_t i (0); i < count; ++i)
+        {
+          ids[i] = _buffers[i];
+        }
+        defer_gl_delete ([ids]
+          {
+            std::array<GLuint, count> tmp (ids);
+            gl.deleteBuffers (static_cast<GLuint> (count), tmp.data());
+          });
       }
     }
 
@@ -176,9 +188,19 @@ namespace opengl
     template<std::size_t count>
       deferred_upload_vertex_arrays<count>::~deferred_upload_vertex_arrays()
     {
+      // Same as buffers above: never call GL directly from a destructor.
       if (_buffer_generated)
       {
-        gl.deleteVertexArray (count, _vertex_arrays);
+        std::array<GLuint, count> ids;
+        for (std::size_t i (0); i < count; ++i)
+        {
+          ids[i] = _vertex_arrays[i];
+        }
+        defer_gl_delete ([ids]
+          {
+            std::array<GLuint, count> tmp (ids);
+            gl.deleteVertexArray (static_cast<GLuint> (count), tmp.data());
+          });
       }
     }
 
@@ -216,9 +238,19 @@ namespace opengl
     template<std::size_t count>
       deferred_upload_framebuffers<count>::~deferred_upload_framebuffers()
     {
+      // Same as buffers above: never call GL directly from a destructor.
       if (_buffer_generated)
       {
-        gl.deleteFramebuffers(count, _framebuffers);
+        std::array<GLuint, count> ids;
+        for (std::size_t i (0); i < count; ++i)
+        {
+          ids[i] = _framebuffers[i];
+        }
+        defer_gl_delete ([ids]
+          {
+            std::array<GLuint, count> tmp (ids);
+            gl.deleteFramebuffers (static_cast<GLsizei> (count), tmp.data());
+          });
       }
     }
 

@@ -68,6 +68,9 @@ namespace opengl
     friend struct scoped::use_program;
 
     std::optional<GLuint> _handle;
+    mutable std::unordered_map<std::string, GLuint> _uniform_location_cache;
+    mutable std::unordered_map<std::string, GLuint> _attrib_location_cache;
+    mutable std::unordered_map<std::string, GLuint> _uniform_block_cache;
   };
 
   namespace scoped

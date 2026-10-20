@@ -28,24 +28,24 @@ public:
   public:
     const float& getFloat(size_t field) const
     {
-      assert(field < file.fieldCount);
+      file.require_field(field);
       return *reinterpret_cast<float*>(offset + field * 4);
     }
     const unsigned int& getUInt(size_t field) const
     {
-      assert(field < file.fieldCount);
+      file.require_field(field);
       return *reinterpret_cast<unsigned int*>(offset + field * 4);
     }
     const int& getInt(size_t field) const
     {
-      assert(field < file.fieldCount);
+      file.require_field(field);
       return *reinterpret_cast<int*>(offset + field * 4);
     }
     const char *getString(size_t field) const
     {
-      assert(field < file.fieldCount);
+      file.require_field(field);
       size_t stringOffset = getUInt(field);
-      assert(stringOffset < file.stringSize);
+      file.require_string_offset(stringOffset);
       return file.stringTable.data() + stringOffset;
     }
     const char *getLocalizedString(size_t field, int locale = -1) const
@@ -56,7 +56,7 @@ public:
         // vanilla's LocalizedString is 8 locale strings followed by a flags
         // word, so the flags slot must not be read as a string offset
         int const locale_slots = static_cast<int>(file.locale_count);
-        assert(field + locale_slots <= file.fieldCount);
+        file.require_field(field, static_cast<size_t>(locale_slots));
 
         for (loc = 0; loc < locale_slots; loc++)
         {
@@ -71,9 +71,9 @@ public:
         }
       }
 
-      assert(field + loc < file.fieldCount);
-      size_t stringOffset = getUInt(field + loc);
-      assert(stringOffset < file.stringSize);
+      file.require_field(static_cast<size_t>(field + loc));
+      size_t stringOffset = getUInt(static_cast<size_t>(field + loc));
+      file.require_string_offset(stringOffset);
       return file.stringTable.data() + stringOffset;
     }
   private:
@@ -116,7 +116,37 @@ public:
 
   inline Record getRecord(size_t id)
   {
-    return Record(*this, data.data() + id*recordSize);
+    if (!recordSize || id >= recordCount)
+    {
+      throw NotFound();
+    }
+    size_t const offset = id * recordSize;
+    if (offset + recordSize > data.size())
+    {
+      throw NotFound();
+    }
+    return Record(*this, data.data() + offset);
+  }
+
+  void require_field(size_t field, size_t count = 1) const
+  {
+    if (!count || field >= fieldCount || count > fieldCount - field)
+    {
+      throw NotFound();
+    }
+    size_t const end = (field + count) * 4U;
+    if (end > recordSize || end > data.size())
+    {
+      throw NotFound();
+    }
+  }
+
+  void require_string_offset(size_t string_offset) const
+  {
+    if (string_offset >= stringSize || string_offset >= stringTable.size())
+    {
+      throw NotFound();
+    }
   }
 
   inline Iterator begin()
@@ -145,10 +175,10 @@ public:
 
 private:
   std::string filename;
-  size_t recordSize;
-  size_t recordCount;
-  size_t fieldCount;
-  size_t stringSize;
+  size_t recordSize = 0;
+  size_t recordCount = 0;
+  size_t fieldCount = 0;
+  size_t stringSize = 0;
   // locale strings a LocalizedString holds before its flags word;
   // vanilla has 8, later clients have more
   size_t locale_count = 9;

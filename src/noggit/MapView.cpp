@@ -1676,6 +1676,7 @@ void MapView::initializeGL()
 void MapView::paintGL()
 {
   opengl::context::scoped_setter const _ (::gl, context());
+  opengl::process_pending_gl_deletions();
   const qreal now(_startup_time.elapsed() / 1000.0);
 
   double dt = now - _last_update;
@@ -1852,6 +1853,15 @@ void MapView::tick (float dt)
   // start unloading tiles
   _world->mapIndex.enterTile (tile_index (_camera.position));
   _world->mapIndex.unloadTiles (tile_index (_camera.position));
+
+  // The picker caches a raw MapChunk*; an unload or reload above replaces
+  // that object, so revalidate before any picker button can touch it.
+  // Runs here (not in the tool tick) because the picker window stays open
+  // while other tools are active.
+  if (texturingTool)
+  {
+    texturingTool->revalidate_picker (_world.get());
+  }
 
   dt = std::min(dt, 1.0f);
 

@@ -437,6 +437,14 @@ namespace noggit
     }
 
 
+    void texturing_tool::revalidate_picker(World* world)
+    {
+      if (world && _texture_picker)
+      {
+        _texture_picker->revalidate(world->mapIndex);
+      }
+    }
+
     void texturing_tool::tick(float dt, math::vector_3d const& cursor_pos, bool cursor_under_map, World* world)
     {
       if (_left_mouse_button && !cursor_under_map)

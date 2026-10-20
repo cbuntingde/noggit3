@@ -17,6 +17,8 @@
 #include <opengl/scoped.hpp>
 #include <opengl/shader.fwd.hpp>
 
+#include <cstdint>
+#include <stdexcept>
 #include <string>
 #include <vector>
 
@@ -258,6 +260,13 @@ public:
   template<typename T>
     static std::vector<T> M2Array(MPQFile const& f, uint32_t offset, uint32_t count)
   {
+    static constexpr std::uint64_t max_elements = 1'000'000ULL;
+    std::uint64_t const need = static_cast<std::uint64_t>(count) * sizeof(T);
+    if (count > max_elements || need > f.getSize())
+    {
+      throw std::runtime_error ("M2 array has implausible size.");
+    }
+    f.require_range(offset, static_cast<size_t>(need));
     T const* start = reinterpret_cast<T const*>(f.getBuffer() + offset);
     return std::vector<T>(start, start + count);
   }

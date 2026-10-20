@@ -21,7 +21,9 @@
 
 #include <algorithm>
 #include <cassert>
+#include <cstring>
 #include <list>
+#include <stdexcept>
 #include <map>
 #include <string>
 #include <utility>
@@ -78,30 +80,54 @@ void MapTile::finishLoading()
 
   uint32_t version;
 
-  theFile.read(&fourcc, 4);
+  if (theFile.read(&fourcc, 4) != 4)
+  {
+    throw std::runtime_error ("ADT is truncated.");
+  }
   theFile.seekRelative(4);
-  theFile.read(&version, 4);
+  if (theFile.read(&version, 4) != 4)
+  {
+    throw std::runtime_error ("ADT is truncated.");
+  }
 
-  assert(fourcc == 'MVER' && version == 18);
+  if (fourcc != 'MVER' || version != 18)
+  {
+    throw std::runtime_error ("ADT has an invalid MVER chunk.");
+  }
 
   // - MHDR ----------------------------------------------
 
-  theFile.read(&fourcc, 4);
+  if (theFile.read(&fourcc, 4) != 4)
+  {
+    throw std::runtime_error ("ADT is truncated.");
+  }
   theFile.seekRelative(4);
 
-  assert(fourcc == 'MHDR');
+  if (fourcc != 'MHDR')
+  {
+    throw std::runtime_error ("ADT has an invalid MHDR chunk.");
+  }
 
-  theFile.read(&Header, sizeof(MHDR));
+  if (theFile.read(&Header, sizeof(MHDR)) != sizeof(MHDR))
+  {
+    throw std::runtime_error ("ADT has a truncated MHDR chunk.");
+  }
 
   mFlags = Header.flags;
 
   // - MCIN ----------------------------------------------
 
   theFile.seek(Header.mcin + 0x14);
-  theFile.read(&fourcc, 4);
+  if (theFile.read(&fourcc, 4) != 4)
+  {
+    throw std::runtime_error ("ADT is truncated.");
+  }
   theFile.seekRelative(4);
 
-  assert(fourcc == 'MCIN');
+  if (fourcc != 'MCIN')
+  {
+    throw std::runtime_error ("ADT has an invalid MCIN chunk.");
+  }
 
   for (int i = 0; i < 256; ++i)
   {
@@ -112,20 +138,38 @@ void MapTile::finishLoading()
   // - MTEX ----------------------------------------------
 
   theFile.seek(Header.mtex + 0x14);
-  theFile.read(&fourcc, 4);
-  theFile.read(&size, 4);
+  if (theFile.read(&fourcc, 4) != 4 || theFile.read(&size, 4) != 4)
+  {
+    throw std::runtime_error ("ADT is truncated.");
+  }
 
-  assert(fourcc == 'MTEX');
+  if (fourcc != 'MTEX')
+  {
+    throw std::runtime_error ("ADT has an invalid MTEX chunk.");
+  }
+  if (size > 1024U * 1024U || size > theFile.remaining())
+  {
+    throw std::runtime_error ("ADT has an implausible MTEX size.");
+  }
 
   {
+    size_t const list_start = theFile.getPos();
+    theFile.require_range(list_start, size);
     char const* lCurPos = reinterpret_cast<char const*>(theFile.getPointer());
     char const* lEnd = lCurPos + size;
 
     while (lCurPos < lEnd)
     {
-      mTextureFilenames.push_back(noggit::mpq::normalized_filename(std::string(lCurPos)));
-      lCurPos += strlen(lCurPos) + 1;
+      size_t const max_len = static_cast<size_t>(lEnd - lCurPos);
+      size_t const len = strnlen (lCurPos, max_len);
+      if (len >= max_len)
+      {
+        throw std::runtime_error ("ADT MTEX entry is not NUL-terminated.");
+      }
+      mTextureFilenames.push_back(noggit::mpq::normalized_filename(std::string(lCurPos, len)));
+      lCurPos += len + 1;
     }
+    theFile.seek(list_start + size);
   }
 
   if (_load_models)
@@ -133,66 +177,130 @@ void MapTile::finishLoading()
     // - MMDX ----------------------------------------------
 
     theFile.seek(Header.mmdx + 0x14);
-    theFile.read(&fourcc, 4);
-    theFile.read(&size, 4);
+    if (theFile.read(&fourcc, 4) != 4 || theFile.read(&size, 4) != 4)
+    {
+      throw std::runtime_error ("ADT is truncated.");
+    }
 
-    assert(fourcc == 'MMDX');
+    if (fourcc != 'MMDX')
+    {
+      throw std::runtime_error ("ADT has an invalid MMDX chunk.");
+    }
+    if (size > 8U * 1024U * 1024U || size > theFile.remaining())
+    {
+      throw std::runtime_error ("ADT has an implausible MMDX size.");
+    }
 
     {
+      size_t const list_start = theFile.getPos();
+      theFile.require_range(list_start, size);
       char const* lCurPos = reinterpret_cast<char const*>(theFile.getPointer());
       char const* lEnd = lCurPos + size;
 
       while (lCurPos < lEnd)
       {
-        mModelFilenames.push_back(noggit::mpq::normalized_filename(std::string(lCurPos)));
-        lCurPos += strlen(lCurPos) + 1;
+        size_t const max_len = static_cast<size_t>(lEnd - lCurPos);
+        size_t const len = strnlen (lCurPos, max_len);
+        if (len >= max_len)
+        {
+          throw std::runtime_error ("ADT MMDX entry is not NUL-terminated.");
+        }
+        mModelFilenames.push_back(noggit::mpq::normalized_filename(std::string(lCurPos, len)));
+        lCurPos += len + 1;
       }
+      theFile.seek(list_start + size);
     }
 
     // - MWMO ----------------------------------------------
 
     theFile.seek(Header.mwmo + 0x14);
-    theFile.read(&fourcc, 4);
-    theFile.read(&size, 4);
+    if (theFile.read(&fourcc, 4) != 4 || theFile.read(&size, 4) != 4)
+    {
+      throw std::runtime_error ("ADT is truncated.");
+    }
 
-    assert(fourcc == 'MWMO');
+    if (fourcc != 'MWMO')
+    {
+      throw std::runtime_error ("ADT has an invalid MWMO chunk.");
+    }
+    if (size > 8U * 1024U * 1024U || size > theFile.remaining())
+    {
+      throw std::runtime_error ("ADT has an implausible MWMO size.");
+    }
 
     {
+      size_t const list_start = theFile.getPos();
+      theFile.require_range(list_start, size);
       char const* lCurPos = reinterpret_cast<char const*>(theFile.getPointer());
       char const* lEnd = lCurPos + size;
 
       while (lCurPos < lEnd)
       {
-        mWMOFilenames.push_back(noggit::mpq::normalized_filename(std::string(lCurPos)));
-        lCurPos += strlen(lCurPos) + 1;
+        size_t const max_len = static_cast<size_t>(lEnd - lCurPos);
+        size_t const len = strnlen (lCurPos, max_len);
+        if (len >= max_len)
+        {
+          throw std::runtime_error ("ADT MWMO entry is not NUL-terminated.");
+        }
+        mWMOFilenames.push_back(noggit::mpq::normalized_filename(std::string(lCurPos, len)));
+        lCurPos += len + 1;
       }
+      theFile.seek(list_start + size);
     }
 
     // - MDDF ----------------------------------------------
 
     theFile.seek(Header.mddf + 0x14);
-    theFile.read(&fourcc, 4);
-    theFile.read(&size, 4);
+    if (theFile.read(&fourcc, 4) != 4 || theFile.read(&size, 4) != 4)
+    {
+      throw std::runtime_error ("ADT is truncated.");
+    }
 
-    assert(fourcc == 'MDDF');
+    if (fourcc != 'MDDF')
+    {
+      throw std::runtime_error ("ADT has an invalid MDDF chunk.");
+    }
+    if (size % sizeof(ENTRY_MDDF) != 0U || size > 16U * 1024U * 1024U || size > theFile.remaining())
+    {
+      throw std::runtime_error ("ADT has an invalid MDDF size.");
+    }
 
+    theFile.require_range(theFile.getPos(), size);
     ENTRY_MDDF const* mddf_ptr = reinterpret_cast<ENTRY_MDDF const*>(theFile.getPointer());
     for (unsigned int i = 0; i < size / sizeof(ENTRY_MDDF); ++i)
     {
+      if (mddf_ptr[i].nameID >= mModelFilenames.size())
+      {
+        throw std::out_of_range ("ADT MDDF nameID out of range.");
+      }
       lModelInstances.push_back(mddf_ptr[i]);
     }
 
     // - MODF ----------------------------------------------
 
     theFile.seek(Header.modf + 0x14);
-    theFile.read(&fourcc, 4);
-    theFile.read(&size, 4);
+    if (theFile.read(&fourcc, 4) != 4 || theFile.read(&size, 4) != 4)
+    {
+      throw std::runtime_error ("ADT is truncated.");
+    }
 
-    assert(fourcc == 'MODF');
+    if (fourcc != 'MODF')
+    {
+      throw std::runtime_error ("ADT has an invalid MODF chunk.");
+    }
 
+    if (size % sizeof(ENTRY_MODF) != 0U || size > 16U * 1024U * 1024U || size > theFile.remaining())
+    {
+      throw std::runtime_error ("ADT has an invalid MODF size.");
+    }
+    theFile.require_range(theFile.getPos(), size);
     ENTRY_MODF const* modf_ptr = reinterpret_cast<ENTRY_MODF const*>(theFile.getPointer());
     for (unsigned int i = 0; i < size / sizeof(ENTRY_MODF); ++i)
     {
+      if (modf_ptr[i].nameID >= mWMOFilenames.size())
+      {
+        throw std::out_of_range ("ADT MODF nameID out of range.");
+      }
       lWMOInstances.push_back(modf_ptr[i]);
     }
   }
@@ -204,11 +312,20 @@ void MapTile::finishLoading()
   // - MH2O ----------------------------------------------
   if (Header.mh2o != 0) {
     theFile.seek(Header.mh2o + 0x14);
-    theFile.read(&fourcc, 4);
-    theFile.read(&size, 4);
+    if (theFile.read(&fourcc, 4) != 4 || theFile.read(&size, 4) != 4)
+    {
+      throw std::runtime_error ("ADT is truncated.");
+    }
 
     int ofsW = Header.mh2o + 0x14 + 0x8;
-    assert(fourcc == 'MH2O');
+    if (fourcc != 'MH2O')
+    {
+      throw std::runtime_error ("ADT has an invalid MH2O chunk.");
+    }
+    if (size > 4U * 1024U * 1024U || size > theFile.remaining())
+    {
+      throw std::runtime_error ("ADT has an implausible MH2O size.");
+    }
 
     Water.readFromFile(theFile, ofsW);
   }
@@ -218,14 +335,22 @@ void MapTile::finishLoading()
   if (mFlags & 1)
   {
     theFile.seek(Header.mfbo + 0x14);
-    theFile.read(&fourcc, 4);
-    theFile.read(&size, 4);
+    if (theFile.read(&fourcc, 4) != 4 || theFile.read(&size, 4) != 4)
+    {
+      throw std::runtime_error ("ADT is truncated.");
+    }
 
-    assert(fourcc == 'MFBO');
+    if (fourcc != 'MFBO')
+    {
+      throw std::runtime_error ("ADT has an invalid MFBO chunk.");
+    }
 
     int16_t mMaximum[9], mMinimum[9];
-    theFile.read(mMaximum, sizeof(mMaximum));
-    theFile.read(mMinimum, sizeof(mMinimum));
+    if (theFile.read(mMaximum, sizeof(mMaximum)) != sizeof(mMaximum)
+      || theFile.read(mMinimum, sizeof(mMinimum)) != sizeof(mMinimum))
+    {
+      throw std::runtime_error ("ADT has a truncated MFBO chunk.");
+    }
 
     const float xPositions[] = { this->xbase, this->xbase + 266.0f, this->xbase + 533.0f };
     const float yPositions[] = { this->zbase, this->zbase + 266.0f, this->zbase + 533.0f };
@@ -249,20 +374,36 @@ void MapTile::finishLoading()
   {
     theFile.seek(Header.mtxf + 0x14);
 
-    theFile.read(&fourcc, 4);
-    theFile.read(&size, 4);
+    if (theFile.read(&fourcc, 4) != 4 || theFile.read(&size, 4) != 4)
+    {
+      throw std::runtime_error ("ADT is truncated.");
+    }
 
-    assert(fourcc == 'MTXF');
+    if (fourcc != 'MTXF')
+    {
+      throw std::runtime_error ("ADT has an invalid MTXF chunk.");
+    }
+    if (size % 0x4U != 0U || size > 1024U * 1024U || size > theFile.remaining())
+    {
+      throw std::runtime_error ("ADT has an invalid MTXF size.");
+    }
 
     int count = size / 0x4;
 
-    std::vector<mtxf_entry> mtxf_data(count);
+    std::vector<mtxf_entry> mtxf_data(static_cast<size_t>(count));
 
-    theFile.read(mtxf_data.data(), size);
+    if (!mtxf_data.empty() && theFile.read(mtxf_data.data(), size) != size)
+    {
+      throw std::runtime_error ("ADT has a truncated MTXF chunk.");
+    }
 
     for (int i = 0; i < count; ++i)
     {
-      _mtxf_entries[mTextureFilenames[i]] = mtxf_data[i];
+      if (static_cast<size_t>(i) >= mTextureFilenames.size())
+      {
+        throw std::out_of_range ("ADT MTXF entry out of range.");
+      }
+      _mtxf_entries[mTextureFilenames[i]] = mtxf_data[static_cast<size_t>(i)];
     }
   }
 

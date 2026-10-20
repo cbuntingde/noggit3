@@ -5,6 +5,8 @@
 #include <opengl/context.hpp>
 #include <opengl/texture.hpp>
 
+#include <array>
+#include <cstddef>
 #include <optional>
 #include <stdexcept>
 

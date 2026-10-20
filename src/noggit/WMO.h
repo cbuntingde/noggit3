@@ -64,8 +64,9 @@ struct wmo_ubo_data
 class WMOGroup
 {
 public:
-  WMOGroup(WMO *wmo, MPQFile* f, int num, char const* names);
+  WMOGroup(WMO *wmo, MPQFile* f, int num, char const* names, size_t names_size);
   WMOGroup(WMOGroup const&);
+  ~WMOGroup();
 
   void load();
 
@@ -136,7 +137,7 @@ private:
   std::vector<::math::vector_4d> _vertex_colors;
   std::vector<uint16_t> _indices;
 
-  GLuint _ubo;
+  GLuint _ubo = 0;
 
   int _vertex_offset = 0;
   int _index_offset = 0;

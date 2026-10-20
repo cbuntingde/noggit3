@@ -2,6 +2,7 @@
 
 #include <noggit/ui/TexturePicker.h>
 
+#include <noggit/map_index.hpp>
 #include <noggit/ui/font_awesome.hpp>
 #include <noggit/ui/font_noggit.hpp>
 #include <noggit/Selection.h>
@@ -13,8 +14,6 @@
 
 #include <QtWidgets/QGridLayout>
 #include <QtWidgets/QPushButton>
-
-#include <cassert>
 
 namespace noggit
 {
@@ -83,14 +82,51 @@ namespace noggit
       if (chunk)
       {
         _chunk = chunk;
+        _tile_index = chunk->mt->index;
+        _chunk_x = chunk->px;
+        _chunk_z = chunk->py;
         update(false);
       }
+    }
+
+    void texture_picker::invalidate()
+    {
+      _chunk = nullptr;
+      _chunk_x = -1;
+      _chunk_z = -1;
+      _textures.clear();
+      for (auto* label : _labels)
+      {
+        label->hide();
+      }
+    }
+
+    bool texture_picker::revalidate(MapIndex const& map_index)
+    {
+      if (!_chunk)
+      {
+        return false;
+      }
+      MapTile* tile = map_index.tileLoaded(_tile_index)
+        ? map_index.getTile(_tile_index)
+        : nullptr;
+      bool const alive = tile
+        && _chunk_x >= 0 && _chunk_z >= 0
+        && tile->getChunk(static_cast<unsigned>(_chunk_x), static_cast<unsigned>(_chunk_z)) == _chunk;
+      if (!alive)
+      {
+        invalidate();
+      }
+      return alive;
     }
 
     void texture_picker::setTexture
       (size_t id, current_texture* current_texture_window)
     {
-      assert(id < _textures.size());
+      if (!_chunk || id >= _textures.size())
+      {
+        return;
+      }
 
       emit set_texture(_textures[id]);
       current_texture_window->set_texture (_textures[id]->filename);
@@ -98,6 +134,10 @@ namespace noggit
 
     void texture_picker::shiftSelectedTextureLeft()
     {
+      if (!_chunk)
+      {
+        return;
+      }
       auto&& selectedTexture = selected_texture::get();
       auto ts = _chunk->texture_set.get();
       for (int i = 1; i < ts->num(); i++)
@@ -113,6 +153,10 @@ namespace noggit
 
     void texture_picker::shiftSelectedTextureRight()
     {
+      if (!_chunk)
+      {
+        return;
+      }
       auto&& selectedTexture = selected_texture::get();
       auto ts = _chunk->texture_set.get();
       for (int i = 0; i < ts->num() - 1; i++)
@@ -128,6 +172,16 @@ namespace noggit
 
     void texture_picker::update(bool set_changed)
     {
+      if (!_chunk)
+      {
+        _textures.clear();
+        for (auto* label : _labels)
+        {
+          label->hide();
+        }
+        return;
+      }
+
       if (set_changed)
       {
         _chunk->mt->changed = true;
@@ -136,14 +190,14 @@ namespace noggit
       _textures.clear();
       size_t index = 0;
 
-      for (; index < _chunk->texture_set->num(); ++index)
+      for (; index < _chunk->texture_set->num() && index < _labels.size(); ++index)
       {
         _textures.emplace_back(_chunk->texture_set->texture(index));
         _labels[index]->set_texture(_textures[index]->filename);
         _labels[index]->show();
       }
 
-      for (; index < 4U; ++index)
+      for (; index < _labels.size(); ++index)
       {
         _labels[index]->hide();
       }

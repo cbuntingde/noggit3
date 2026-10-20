@@ -19,8 +19,8 @@ struct blp_texture : public opengl::texture, AsyncObject
   blp_texture (std::string const& filename);
   void finishLoading();
 
-  void loadFromUncompressedData(BLPHeader const* lHeader, char const* lData);
-  void loadFromCompressedData(BLPHeader const* lHeader, char const* lData);
+  void loadFromUncompressedData(BLPHeader const* lHeader, char const* lData, size_t file_size);
+  void loadFromCompressedData(BLPHeader const* lHeader, char const* lData, size_t file_size);
 
   int width() const { return _width; }
   int height() const { return _height; }

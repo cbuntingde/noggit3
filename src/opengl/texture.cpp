@@ -15,9 +15,17 @@ namespace opengl
 
   texture::~texture()
   {
+    // Never call GL directly here: this destructor may run on any thread
+    // (cache eviction, tile unload) with no GL context current, where
+    // deleteTextures throws. The render loop runs the queued deletion.
     if (_id > 0 && _id != -1)
     {
-      gl.deleteTextures (1, &_id);
+      GLuint const id (_id);
+      defer_gl_delete ([id]
+        {
+          GLuint tmp (id);
+          gl.deleteTextures (1, &tmp);
+        });
     }
   }
 

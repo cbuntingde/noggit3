@@ -8,6 +8,7 @@
 #include <noggit/Misc.h>
 
 #include <algorithm>
+#include <stdexcept>
 
 liquid_chunk::liquid_chunk(float x, float z, bool use_mclq_green_lava, liquid_tile* parent_tile)
   : xbase(x)
@@ -64,18 +65,28 @@ void liquid_chunk::from_mclq(std::vector<mclq>& layers)
 void liquid_chunk::fromFile(MPQFile &f, size_t basePos)
 {
   MH2O_Header header;
-  f.read(&header, sizeof(MH2O_Header));
+  if (f.read(&header, sizeof(MH2O_Header)) != sizeof(MH2O_Header))
+  {
+    throw std::runtime_error ("MH2O chunk is truncated.");
+  }
 
   if (!header.nLayers)
   {
     return;
+  }
+  if (header.nLayers > 64U)
+  {
+    throw std::runtime_error ("MH2O has implausible layer count.");
   }
 
   //render
   if (header.ofsRenderMask)
   {
     f.seek(basePos + header.ofsRenderMask);
-    f.read(&attributes, sizeof(MH2O_Attributes));
+    if (f.read(&attributes, sizeof(MH2O_Attributes)) != sizeof(MH2O_Attributes))
+    {
+      throw std::runtime_error ("MH2O render mask is truncated.");
+    }
   }
 
   for (std::size_t k = 0; k < header.nLayers; ++k)
@@ -85,16 +96,32 @@ void liquid_chunk::fromFile(MPQFile &f, size_t basePos)
 
     //info
     f.seek(basePos + header.ofsInformation + sizeof(MH2O_Information)* k);
-    f.read(&info, sizeof(MH2O_Information));
+    if (f.read(&info, sizeof(MH2O_Information)) != sizeof(MH2O_Information))
+    {
+      throw std::runtime_error ("MH2O info is truncated.");
+    }
+    if (info.width > 8 || info.height > 8 || info.xOffset > 8 || info.yOffset > 8
+      || info.xOffset + info.width > 8 || info.yOffset + info.height > 8)
+    {
+      throw std::out_of_range ("MH2O info extents out of range.");
+    }
 
     //mask
     if (info.ofsInfoMask > 0 && info.height > 0)
     {
       size_t bitmask_size = static_cast<size_t>(std::ceil(info.height * info.width / 8.0f));
+      if (bitmask_size > sizeof(infoMask))
+      {
+        throw std::runtime_error ("MH2O mask size is implausible.");
+      }
 
       f.seek(info.ofsInfoMask + basePos);
       // only read the relevant data
-      f.read(&infoMask, bitmask_size);
+      infoMask = 0xFFFFFFFFFFFFFFFF;
+      if (f.read(&infoMask, bitmask_size) != bitmask_size)
+      {
+        throw std::runtime_error ("MH2O mask is truncated.");
+      }
     }
 
     math::vector_3d pos(xbase, 0.0f, zbase);

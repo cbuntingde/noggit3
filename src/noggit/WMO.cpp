@@ -12,7 +12,9 @@
 #include <opengl/scoped.hpp>
 
 #include <algorithm>
+#include <cstring>
 #include <iomanip>
+#include <stdexcept>
 #include <iostream>
 #include <map>
 #include <regex>
@@ -42,41 +44,67 @@ void WMO::finishLoading ()
 
   char const* ddnames = nullptr;
   char const* groupnames = nullptr;
+  size_t groupnames_size = 0;
 
   // - MVER ----------------------------------------------
 
   uint32_t version;
 
-  f.read (&fourcc, 4);
+  if (f.read (&fourcc, 4) != 4)
+  {
+    throw std::runtime_error ("WMO \"" + filename + "\" is truncated.");
+  }
   f.seekRelative (4);
-  f.read (&version, 4);
+  if (f.read (&version, 4) != 4)
+  {
+    throw std::runtime_error ("WMO \"" + filename + "\" is truncated.");
+  }
 
-  assert (fourcc == 'MVER' && version == 17);
+  if (fourcc != 'MVER' || version != 17)
+  {
+    throw std::runtime_error ("WMO \"" + filename + "\" has an invalid header.");
+  }
 
   // - MOHD ----------------------------------------------
 
-  f.read (&fourcc, 4);
+  if (f.read (&fourcc, 4) != 4)
+  {
+    throw std::runtime_error ("WMO \"" + filename + "\" is truncated.");
+  }
   f.seekRelative (4);
 
-  assert (fourcc == 'MOHD');
+  if (fourcc != 'MOHD')
+  {
+    throw std::runtime_error ("WMO \"" + filename + "\" has an invalid MOHD chunk.");
+  }
 
   CArgb ambient_color;
   unsigned int nTextures, nGroups, nP, nLights, nModels, nDoodads, nDoodadSets, nX;
   // header
-  f.read (&nTextures, 4);
-  f.read (&nGroups, 4);
-  f.read (&nP, 4);
-  f.read (&nLights, 4);
-  f.read (&nModels, 4);
-  f.read (&nDoodads, 4);
-  f.read (&nDoodadSets, 4);
-  f.read (&ambient_color, 4);
-  f.read (&nX, 4);
-  f.read (ff, 12);
+  if (f.read (&nTextures, 4) != 4 || f.read (&nGroups, 4) != 4 || f.read (&nP, 4) != 4
+    || f.read (&nLights, 4) != 4 || f.read (&nModels, 4) != 4 || f.read (&nDoodads, 4) != 4
+    || f.read (&nDoodadSets, 4) != 4 || f.read (&ambient_color, 4) != 4 || f.read (&nX, 4) != 4)
+  {
+    throw std::runtime_error ("WMO \"" + filename + "\" has a truncated MOHD chunk.");
+  }
+  if (nGroups > 8192U || nTextures > 65536U)
+  {
+    throw std::runtime_error ("WMO \"" + filename + "\" has implausible counts.");
+  }
+  if (f.read (ff, 12) != 12)
+  {
+    throw std::runtime_error ("WMO \"" + filename + "\" has a truncated MOHD chunk.");
+  }
   extents[0] = ::math::vector_3d (ff[0], ff[1], ff[2]);
-  f.read (ff, 12);
+  if (f.read (ff, 12) != 12)
+  {
+    throw std::runtime_error ("WMO \"" + filename + "\" has a truncated MOHD chunk.");
+  }
   extents[1] = ::math::vector_3d (ff[0], ff[1], ff[2]);
-  f.read(&flags, 2);
+  if (f.read(&flags, 2) != 2)
+  {
+    throw std::runtime_error ("WMO \"" + filename + "\" has a truncated MOHD chunk.");
+  }
 
   f.seekRelative (2);
 
@@ -87,20 +115,42 @@ void WMO::finishLoading ()
 
   // - MOTX ----------------------------------------------
 
-  f.read (&fourcc, 4);
-  f.read (&size, 4);
+  if (f.read (&fourcc, 4) != 4 || f.read (&size, 4) != 4)
+  {
+    throw std::runtime_error ("WMO \"" + filename + "\" is truncated.");
+  }
 
-  assert (fourcc == 'MOTX');
+  if (fourcc != 'MOTX')
+  {
+    throw std::runtime_error ("WMO \"" + filename + "\" has an invalid MOTX chunk.");
+  }
+  if (size > 16U * 1024U * 1024U || size > f.remaining())
+  {
+    throw std::runtime_error ("WMO \"" + filename + "\" has an implausible MOTX size.");
+  }
 
   std::vector<char> texbuf (size);
-  f.read (texbuf.data(), texbuf.size());
+  if (!texbuf.empty() && f.read (texbuf.data(), texbuf.size()) != texbuf.size())
+  {
+    throw std::runtime_error ("WMO \"" + filename + "\" has a truncated MOTX chunk.");
+  }
+  texbuf.push_back ('\0');
 
   // - MOMT ----------------------------------------------
 
-  f.read (&fourcc, 4);
-  f.read (&size, 4);
+  if (f.read (&fourcc, 4) != 4 || f.read (&size, 4) != 4)
+  {
+    throw std::runtime_error ("WMO \"" + filename + "\" is truncated.");
+  }
 
-  assert (fourcc == 'MOMT');
+  if (fourcc != 'MOMT')
+  {
+    throw std::runtime_error ("WMO \"" + filename + "\" has an invalid MOMT chunk.");
+  }
+  if (size % 0x40U != 0U || size / 0x40U > 65536U || size > f.remaining())
+  {
+    throw std::runtime_error ("WMO \"" + filename + "\" has an invalid MOMT size.");
+  }
 
   std::size_t const num_materials (size / 0x40);
   materials.resize (num_materials);
@@ -110,8 +160,16 @@ void WMO::finishLoading ()
   auto load_texture
     ( [&] (std::uint32_t ofs)
       {
-        char const* texture
-          (texbuf[ofs] ? &texbuf[ofs] : "textures/shanecube.blp");
+        char const* texture ("textures/shanecube.blp");
+        if (ofs < texbuf.size() && texbuf[ofs])
+        {
+          size_t const max_len = texbuf.size() - ofs;
+          size_t const len = strnlen (&texbuf[ofs], max_len);
+          if (len < max_len)
+          {
+            texture = &texbuf[ofs];
+          }
+        }
 
         auto const mapping
           (texture_offset_to_inmem_index.emplace(ofs, textures.size()));
@@ -140,36 +198,72 @@ void WMO::finishLoading ()
 
   // - MOGN ----------------------------------------------
 
-  f.read (&fourcc, 4);
-  f.read (&size, 4);
+  if (f.read (&fourcc, 4) != 4 || f.read (&size, 4) != 4)
+  {
+    throw std::runtime_error ("WMO is truncated.");
+  }
 
-  assert (fourcc == 'MOGN');
+  if (fourcc != 'MOGN')
+  {
+    throw std::runtime_error ("WMO has an invalid MOGN chunk.");
+  }
+  if (size > 16U * 1024U * 1024U || size > f.remaining())
+  {
+    throw std::runtime_error ("WMO has an implausible MOGN size.");
+  }
 
   groupnames = reinterpret_cast<char const*> (f.getPointer ());
+  groupnames_size = size;
 
   f.seekRelative (size);
 
   // - MOGI ----------------------------------------------
 
-  f.read (&fourcc, 4);
-  f.read (&size, 4);
+  if (f.read (&fourcc, 4) != 4 || f.read (&size, 4) != 4)
+  {
+    throw std::runtime_error ("WMO is truncated.");
+  }
 
-  assert (fourcc == 'MOGI');
+  if (fourcc != 'MOGI')
+  {
+    throw std::runtime_error ("WMO has an invalid MOGI chunk.");
+  }
+  if (size > 1024U * 1024U || size > f.remaining())
+  {
+    throw std::runtime_error ("WMO has an implausible MOGI size.");
+  }
 
+  groups.reserve (nGroups);
   for (size_t i (0); i < nGroups; ++i) {
-    groups.emplace_back (this, &f, i, groupnames);
+    groups.emplace_back (this, &f, static_cast<int>(i), groupnames, groupnames_size);
   }
 
   // - MOSB ----------------------------------------------
 
-  f.read (&fourcc, 4);
-  f.read (&size, 4);
+  if (f.read (&fourcc, 4) != 4 || f.read (&size, 4) != 4)
+  {
+    throw std::runtime_error ("WMO is truncated.");
+  }
 
-  assert (fourcc == 'MOSB');
+  if (fourcc != 'MOSB')
+  {
+    throw std::runtime_error ("WMO has an invalid MOSB chunk.");
+  }
+  if (size > 1024U * 1024U || size > f.remaining())
+  {
+    throw std::runtime_error ("WMO has an implausible MOSB size.");
+  }
 
   if (size > 4)
   {
-    std::string path = noggit::mpq::normalized_filename(std::string (reinterpret_cast<char const*>(f.getPointer ())));
+    f.require_range (f.getPos(), size);
+    char const* const skybox_name = reinterpret_cast<char const*>(f.getPointer ());
+    size_t const skybox_len = strnlen (skybox_name, size);
+    if (skybox_len >= size)
+    {
+      throw std::runtime_error ("WMO skybox name is not NUL-terminated.");
+    }
+    std::string path = noggit::mpq::normalized_filename(std::string (skybox_name, skybox_len));
     path = misc::replace(path, "mdx", "m2");
 
     if (path.length())
@@ -185,61 +279,121 @@ void WMO::finishLoading ()
 
   // - MOPV ----------------------------------------------
 
-  f.read (&fourcc, 4);
-  f.read(&size, 4);
+  if (f.read (&fourcc, 4) != 4 || f.read(&size, 4) != 4)
+  {
+    throw std::runtime_error ("WMO is truncated.");
+  }
 
-  assert (fourcc == 'MOPV');
+  if (fourcc != 'MOPV')
+  {
+    throw std::runtime_error ("WMO has an invalid MOPV chunk.");
+  }
+  if (size % 12U != 0U || size / 12U > 100'000U || size > f.remaining())
+  {
+    throw std::runtime_error ("WMO has an invalid MOPV size.");
+  }
 
   std::vector<math::vector_3d> portal_vertices;
 
   for (size_t i (0); i < size / 12; ++i) {
-    f.read (ff, 12);
+    if (f.read (ff, 12) != 12)
+    {
+      throw std::runtime_error ("WMO has a truncated MOPV chunk.");
+    }
     portal_vertices.push_back(math::vector_3d(ff[0], ff[2], -ff[1]));
   }
 
   // - MOPT ----------------------------------------------
 
-  f.read (&fourcc, 4);
-  f.read (&size, 4);
+  if (f.read (&fourcc, 4) != 4 || f.read (&size, 4) != 4)
+  {
+    throw std::runtime_error ("WMO is truncated.");
+  }
 
-  assert (fourcc == 'MOPT');
+  if (fourcc != 'MOPT')
+  {
+    throw std::runtime_error ("WMO has an invalid MOPT chunk.");
+  }
+  if (size > 16U * 1024U * 1024U || size > f.remaining())
+  {
+    throw std::runtime_error ("WMO has an implausible MOPT size.");
+  }
 
   f.seekRelative (size);
 
   // - MOPR ----------------------------------------------
 
-  f.read (&fourcc, 4);
-  f.read (&size, 4);
+  if (f.read (&fourcc, 4) != 4 || f.read (&size, 4) != 4)
+  {
+    throw std::runtime_error ("WMO is truncated.");
+  }
 
-  assert(fourcc == 'MOPR');
+  if (fourcc != 'MOPR')
+  {
+    throw std::runtime_error ("WMO has an invalid MOPR chunk.");
+  }
+  if (size > 16U * 1024U * 1024U || size > f.remaining())
+  {
+    throw std::runtime_error ("WMO has an implausible MOPR size.");
+  }
 
   f.seekRelative (size);
 
   // - MOVV ----------------------------------------------
 
-  f.read (&fourcc, 4);
-  f.read (&size, 4);
+  if (f.read (&fourcc, 4) != 4 || f.read (&size, 4) != 4)
+  {
+    throw std::runtime_error ("WMO is truncated.");
+  }
 
-  assert (fourcc == 'MOVV');
+  if (fourcc != 'MOVV')
+  {
+    throw std::runtime_error ("WMO has an invalid MOVV chunk.");
+  }
+  if (size > 16U * 1024U * 1024U || size > f.remaining())
+  {
+    throw std::runtime_error ("WMO has an implausible MOVV size.");
+  }
 
   f.seekRelative (size);
 
   // - MOVB ----------------------------------------------
 
-  f.read (&fourcc, 4);
-  f.read (&size, 4);
+  if (f.read (&fourcc, 4) != 4 || f.read (&size, 4) != 4)
+  {
+    throw std::runtime_error ("WMO is truncated.");
+  }
 
-  assert (fourcc == 'MOVB');
+  if (fourcc != 'MOVB')
+  {
+    throw std::runtime_error ("WMO has an invalid MOVB chunk.");
+  }
+  if (size > 16U * 1024U * 1024U || size > f.remaining())
+  {
+    throw std::runtime_error ("WMO has an implausible MOVB size.");
+  }
 
   f.seekRelative (size);
 
   // - MOLT ----------------------------------------------
 
-  f.read (&fourcc, 4);
+  if (f.read (&fourcc, 4) != 4)
+  {
+    throw std::runtime_error ("WMO is truncated.");
+  }
   f.seekRelative (4);
 
-  assert (fourcc == 'MOLT');
+  if (fourcc != 'MOLT')
+  {
+    throw std::runtime_error ("WMO has an invalid MOLT chunk.");
+  }
 
+  if (nLights > 1024U)
+  {
+    throw std::runtime_error ("WMO has an implausible light count.");
+  }
+  // WMOLight::init reads 48 bytes per light with no size field on MOLT.
+  f.require_range (f.getPos(), static_cast<size_t>(nLights) * 48U);
   for (size_t i (0); i < nLights; ++i) {
     WMOLight l;
     l.init (&f);
@@ -248,36 +402,70 @@ void WMO::finishLoading ()
 
   // - MODS ----------------------------------------------
 
-  f.read (&fourcc, 4);
+  if (f.read (&fourcc, 4) != 4)
+  {
+    throw std::runtime_error ("WMO is truncated.");
+  }
   f.seekRelative (4);
 
-  assert (fourcc == 'MODS');
+  if (fourcc != 'MODS')
+  {
+    throw std::runtime_error ("WMO has an invalid MODS chunk.");
+  }
 
+  if (nDoodadSets > 1024U)
+  {
+    throw std::runtime_error ("WMO has an implausible doodad set count.");
+  }
+  f.require_range (f.getPos(), static_cast<size_t>(nDoodadSets) * 32U);
   for (size_t i (0); i < nDoodadSets; ++i) {
     WMODoodadSet dds;
-    f.read (&dds, 32);
+    if (f.read (&dds, 32) != 32)
+    {
+      throw std::runtime_error ("WMO has a truncated MODS chunk.");
+    }
     doodadsets.push_back (dds);
   }
 
   // - MODN ----------------------------------------------
 
-  f.read (&fourcc, 4);
-  f.read (&size, 4);
+  if (f.read (&fourcc, 4) != 4 || f.read (&size, 4) != 4)
+  {
+    throw std::runtime_error ("WMO is truncated.");
+  }
 
-  assert (fourcc == 'MODN');
+  if (fourcc != 'MODN')
+  {
+    throw std::runtime_error ("WMO has an invalid MODN chunk.");
+  }
+  if (size > 16U * 1024U * 1024U || size > f.remaining())
+  {
+    throw std::runtime_error ("WMO has an implausible MODN size.");
+  }
 
+  size_t ddnames_size = 0;
   if (size)
   {
     ddnames = reinterpret_cast<char const*> (f.getPointer ());
+    ddnames_size = size;
     f.seekRelative (size);
   }
 
   // - MODD ----------------------------------------------
 
-  f.read (&fourcc, 4);
-  f.read (&size, 4);
+  if (f.read (&fourcc, 4) != 4 || f.read (&size, 4) != 4)
+  {
+    throw std::runtime_error ("WMO is truncated.");
+  }
 
-  assert (fourcc == 'MODD');
+  if (fourcc != 'MODD')
+  {
+    throw std::runtime_error ("WMO has an invalid MODD chunk.");
+  }
+  if (size % 0x28U != 0U || size / 0x28U > 100'000U || size > f.remaining())
+  {
+    throw std::runtime_error ("WMO has an invalid MODD size.");
+  }
 
   for (size_t i (0); i < size / 0x28; ++i) {
     struct
@@ -291,8 +479,17 @@ void WMO::finishLoading ()
     } x;
 
     size_t after_entry (f.getPos() + 0x28);
-    f.read (&x, sizeof (x));
+    if (f.read (&x, sizeof (x)) != sizeof (x))
+    {
+      throw std::runtime_error ("WMO has a truncated MODD chunk.");
+    }
 
+    if (!ddnames || x.name_offset >= ddnames_size
+      || strnlen (ddnames + x.name_offset, ddnames_size - x.name_offset)
+        >= ddnames_size - x.name_offset)
+    {
+      throw std::runtime_error ("WMO doodad name offset out of range.");
+    }
     modelis.emplace_back(ddnames + x.name_offset, &f);
     model_nearest_light_vector.emplace_back();
 
@@ -301,12 +498,21 @@ void WMO::finishLoading ()
 
   // - MFOG ----------------------------------------------
 
-  f.read (&fourcc, 4);
-  f.read (&size, 4);
+  if (f.read (&fourcc, 4) != 4 || f.read (&size, 4) != 4)
+  {
+    throw std::runtime_error ("WMO is truncated.");
+  }
 
-  assert (fourcc == 'MFOG');
+  if (fourcc != 'MFOG')
+  {
+    throw std::runtime_error ("WMO has an invalid MFOG chunk.");
+  }
+  if (size % 0x30U != 0U || size / 0x30U > 1024U || size > f.remaining())
+  {
+    throw std::runtime_error ("WMO has an invalid MFOG size.");
+  }
 
-  int nfogs = size / 0x30;
+  size_t const nfogs = size / 0x30;
   for (size_t i (0); i < nfogs; ++i) {
     WMOFog fog;
     fog.init (&f);
@@ -660,13 +866,17 @@ std::map<uint32_t, std::vector<wmo_doodad_instance>> WMO::doodads_per_group(uint
   }
 
   auto const& dset = doodadsets[doodadset];
-  uint32_t start = dset.start, end = start + dset.size;
+  uint32_t start = dset.start;
+  std::uint64_t const end64 = static_cast<std::uint64_t>(start) + dset.size;
 
   for (int i = 0; i < groups.size(); ++i)
   {
     for (uint16_t ref : groups[i].doodad_ref())
     {
-      if (ref >= start && ref < end)
+      // dset bounds come from the file; modelis bounds are authoritative.
+      if (static_cast<std::uint64_t>(ref) >= start
+        && static_cast<std::uint64_t>(ref) < end64
+        && ref < modelis.size())
       {
         doodads[i].push_back(modelis[ref]);
       }
@@ -726,23 +936,38 @@ void WMOLight::setupOnce(GLint, math::vector_3d, math::vector_3d)
 
 
 
-WMOGroup::WMOGroup(WMO *_wmo, MPQFile* f, int _num, char const* names)
+WMOGroup::WMOGroup(WMO *_wmo, MPQFile* f, int _num, char const* names, size_t names_size)
   : wmo(_wmo)
   , num(_num)
 {
   // extract group info from f
   std::uint32_t flags; // not used, the flags are in the group header
-  f->read(&flags, 4);
+  if (f->read(&flags, 4) != 4)
+  {
+    throw std::runtime_error ("WMO group is truncated.");
+  }
   float ff[3];
-  f->read(ff, 12);
+  if (f->read(ff, 12) != 12)
+  {
+    throw std::runtime_error ("WMO group is truncated.");
+  }
   VertexBoxMax = math::vector_3d(ff[0], ff[1], ff[2]);
-  f->read(ff, 12);
+  if (f->read(ff, 12) != 12)
+  {
+    throw std::runtime_error ("WMO group is truncated.");
+  }
   VertexBoxMin = math::vector_3d(ff[0], ff[1], ff[2]);
   int nameOfs;
-  f->read(&nameOfs, 4);
+  if (f->read(&nameOfs, 4) != 4)
+  {
+    throw std::runtime_error ("WMO group is truncated.");
+  }
 
   //! \todo  get proper name from group header and/or dbc?
-  if (nameOfs > 0) {
+  if (nameOfs > 0 && names
+    && static_cast<size_t>(nameOfs) < names_size
+    && strnlen (names + nameOfs, names_size - static_cast<size_t>(nameOfs))
+      < names_size - static_cast<size_t>(nameOfs)) {
     name = std::string(names + nameOfs);
   }
   else name = "(no name)";
@@ -769,11 +994,27 @@ WMOGroup::WMOGroup(WMOGroup const& other)
   , _texcoords_2(other._texcoords_2)
   , _vertex_colors(other._vertex_colors)
   , _indices(other._indices)
-  , _ubo(other._ubo)
+  // A copy uploads its own buffer later; sharing the name would
+  // double-delete it. _ubo default-initializes to 0 (no buffer).
 {
   if (other.liquid)
   {
     liquid = std::make_unique<wmo_liquid>(*other.liquid.get());
+  }
+}
+
+WMOGroup::~WMOGroup()
+{
+  // Never call GL directly here: groups are destroyed with their WMO on
+  // any thread (cache eviction, tile unload) with no GL context current.
+  if (_ubo)
+  {
+    GLuint const ubo (_ubo);
+    opengl::defer_gl_delete ([ubo]
+      {
+        GLuint tmp (ubo);
+        gl.deleteBuffers (1, &tmp);
+      });
   }
 }
 
@@ -787,6 +1028,49 @@ namespace
     g = (col & 0x0000FF00) >> 8;
     b = (col & 0x000000FF);
     return math::vector_4d(r / 255.0f, g / 255.0f, b / 255.0f, a / 255.0f);
+  }
+
+  //! Read and validate a chunk header. Throws on truncation, FourCC
+  //! mismatch, or a size running past the end of the file.
+  uint32_t read_wmo_chunk_size (MPQFile& f, char const* context, uint32_t expected_fourcc)
+  {
+    uint32_t fourcc = 0;
+    uint32_t size = 0;
+    if (f.read (&fourcc, 4) != 4 || f.read (&size, 4) != 4)
+    {
+      throw std::runtime_error (std::string ("WMO: truncated ") + context + " chunk.");
+    }
+    if (fourcc != expected_fourcc)
+    {
+      throw std::runtime_error (std::string ("WMO: invalid ") + context + " chunk.");
+    }
+    if (size > f.remaining())
+    {
+      throw std::runtime_error (std::string ("WMO: implausible ") + context + " size.");
+    }
+    return size;
+  }
+
+  //! Read a whole chunk payload into a vector. Throws on truncation,
+  //! non-multiple sizes, or implausible element counts.
+  template<typename T>
+    std::vector<T> read_wmo_chunk_vector (MPQFile& f, uint32_t size, size_t max_elements, char const* context)
+  {
+    if (size % sizeof (T) != 0U)
+    {
+      throw std::runtime_error (std::string ("WMO: invalid ") + context + " size.");
+    }
+    size_t const count = size / sizeof (T);
+    if (count > max_elements)
+    {
+      throw std::runtime_error (std::string ("WMO: implausible ") + context + " count.");
+    }
+    std::vector<T> values (count);
+    if (!values.empty() && f.read (values.data(), size) != size)
+    {
+      throw std::runtime_error (std::string ("WMO: truncated ") + context + " data.");
+    }
+    return values;
   }
 }
 
@@ -805,29 +1089,49 @@ void WMOGroup::load()
     return;
   }
 
-  uint32_t fourcc;
-  uint32_t size;
-
   // - MVER ----------------------------------------------
 
-  f.read (&fourcc, 4);
+  uint32_t fourcc = 0;
+  if (f.read (&fourcc, 4) != 4)
+  {
+    throw std::runtime_error ("WMO group is truncated.");
+  }
   f.seekRelative (4);
 
-  uint32_t version;
+  uint32_t version = 0;
 
-  f.read (&version, 4);
+  if (f.read (&version, 4) != 4)
+  {
+    throw std::runtime_error ("WMO group is truncated.");
+  }
 
-  assert (fourcc == 'MVER' && version == 17);
+  if (fourcc != 'MVER' || version != 17)
+  {
+    throw std::runtime_error ("WMO group has an invalid MVER chunk.");
+  }
 
   // - MOGP ----------------------------------------------
 
-  f.read (&fourcc, 4);
+  if (f.read (&fourcc, 4) != 4)
+  {
+    throw std::runtime_error ("WMO group is truncated.");
+  }
   f.seekRelative (4);
 
-  assert (fourcc == 'MOGP');
+  if (fourcc != 'MOGP')
+  {
+    throw std::runtime_error ("WMO group has an invalid MOGP chunk.");
+  }
 
-  f.read (&header, sizeof (wmo_group_header));
+  if (f.read (&header, sizeof (wmo_group_header)) != sizeof (wmo_group_header))
+  {
+    throw std::runtime_error ("WMO group has a truncated header.");
+  }
 
+  if (header.fogs[0] >= wmo->fogs.size())
+  {
+    throw std::out_of_range ("WMO group fog index out of range.");
+  }
   WMOFog &wf = wmo->fogs[header.fogs[0]];
   if (wf.r2 <= 0) fog = -1; // default outdoor fog..?
   else fog = header.fogs[0];
@@ -837,30 +1141,21 @@ void WMOGroup::load()
 
   // - MOPY ----------------------------------------------
 
-  f.read (&fourcc, 4);
-  f.read (&size, 4);
-
-  assert (fourcc == 'MOPY');
-
-  f.seekRelative (size);
+  f.seekRelative (read_wmo_chunk_size (f, "MOPY", 'MOPY'));
 
   // - MOVI ----------------------------------------------
 
-  f.read (&fourcc, 4);
-  f.read (&size, 4);
-
-  assert (fourcc == 'MOVI');
-
-  _indices.resize (size / sizeof (uint16_t));
-
-  f.read (_indices.data (), size);
+  _indices = read_wmo_chunk_vector<uint16_t> (f, read_wmo_chunk_size (f, "MOVI", 'MOVI'), 1'000'000U, "MOVI");
 
   // - MOVT ----------------------------------------------
 
-  f.read (&fourcc, 4);
-  f.read (&size, 4);
-
-  assert (fourcc == 'MOVT');
+  uint32_t const movt_size (read_wmo_chunk_size (f, "MOVT", 'MOVT'));
+  if (movt_size % sizeof (::math::vector_3d) != 0U
+    || movt_size / sizeof (::math::vector_3d) > 1'000'000U)
+  {
+    throw std::runtime_error ("WMO: invalid MOVT size.");
+  }
+  f.require_range (f.getPos(), movt_size);
 
   // let's hope it's padded to 12 bytes, not 16...
   ::math::vector_3d const* vertices = reinterpret_cast< ::math::vector_3d const*>(f.getPointer ());
@@ -870,7 +1165,7 @@ void WMOGroup::load()
 
   rad = 0;
 
-  for (size_t i = 0; i < size / sizeof (::math::vector_3d); ++i) {
+  for (size_t i = 0; i < movt_size / sizeof (::math::vector_3d); ++i) {
     ::math::vector_3d v (vertices[i].x, vertices[i].z, -vertices[i].y);
 
     if (v.x < VertexBoxMin.x) VertexBoxMin.x = v.x;
@@ -886,18 +1181,11 @@ void WMOGroup::load()
   center = (VertexBoxMax + VertexBoxMin) * 0.5f;
   rad = (VertexBoxMax - center).length () + 300.0f;;
 
-  f.seekRelative (size);
+  f.seekRelative (movt_size);
 
   // - MONR ----------------------------------------------
 
-  f.read (&fourcc, 4);
-  f.read (&size, 4);
-
-  assert (fourcc == 'MONR');
-
-  _normals.resize (size / sizeof (::math::vector_3d));
-
-  f.read (_normals.data (), size);
+  _normals = read_wmo_chunk_vector<::math::vector_3d> (f, read_wmo_chunk_size (f, "MONR", 'MONR'), 1'000'000U, "MONR");
 
   for (auto& n : _normals)
   {
@@ -906,123 +1194,72 @@ void WMOGroup::load()
 
   // - MOTV ----------------------------------------------
 
-  f.read (&fourcc, 4);
-  f.read (&size, 4);
-
-  assert (fourcc == 'MOTV');
-
-  _texcoords.resize (size / sizeof (::math::vector_2d));
-
-  f.read (_texcoords.data (), size);
+  _texcoords = read_wmo_chunk_vector<::math::vector_2d> (f, read_wmo_chunk_size (f, "MOTV", 'MOTV'), 1'000'000U, "MOTV");
 
   // - MOBA ----------------------------------------------
 
-  f.read (&fourcc, 4);
-  f.read (&size, 4);
-
-  assert (fourcc == 'MOBA');
-
-  _batches.resize (size / sizeof (wmo_batch));
-  f.read (_batches.data (), size);
+  _batches = read_wmo_chunk_vector<wmo_batch> (f, read_wmo_chunk_size (f, "MOBA", 'MOBA'), 100'000U, "MOBA");
 
   // - MOLR ----------------------------------------------
   if (header.flags.has_light)
   {
-    f.read (&fourcc, 4);
-    f.read (&size, 4);
-
-    assert (fourcc == 'MOLR');
-
-    f.seekRelative (size);
+    f.seekRelative (read_wmo_chunk_size (f, "MOLR", 'MOLR'));
   }
   // - MODR ----------------------------------------------
   if (header.flags.has_doodads)
   {
-    f.read (&fourcc, 4);
-    f.read (&size, 4);
-
-    assert (fourcc == 'MODR');
-
-    _doodad_ref.resize (size / sizeof (int16_t));
-
-    f.read (_doodad_ref.data (), size);
+    _doodad_ref = read_wmo_chunk_vector<std::uint16_t> (f, read_wmo_chunk_size (f, "MODR", 'MODR'), 1'000'000U, "MODR");
   }
   // - MOBN ----------------------------------------------
   if (header.flags.has_bsp_tree)
   {
-    f.read (&fourcc, 4);
-    f.read (&size, 4);
-
-    assert (fourcc == 'MOBN');
-
-    f.seekRelative (size);
+    f.seekRelative (read_wmo_chunk_size (f, "MOBN", 'MOBN'));
   }
   // - MOBR ----------------------------------------------
   if (header.flags.has_bsp_tree)
   {
-    f.read (&fourcc, 4);
-    f.read (&size, 4);
-
-    assert (fourcc == 'MOBR');
-
-    f.seekRelative (size);
+    f.seekRelative (read_wmo_chunk_size (f, "MOBR", 'MOBR'));
   }
 
   if (header.flags.flag_0x400)
   {
     // - MPBV ----------------------------------------------
-    f.read (&fourcc, 4);
-    f.read (&size, 4);
-
-    assert (fourcc == 'MPBV');
-
-    f.seekRelative (size);
+    f.seekRelative (read_wmo_chunk_size (f, "MPBV", 'MPBV'));
 
     // - MPBP ----------------------------------------------
-    f.read (&fourcc, 4);
-    f.read (&size, 4);
-
-    assert (fourcc == 'MPBP');
-
-    f.seekRelative (size);
+    f.seekRelative (read_wmo_chunk_size (f, "MPBP", 'MPBP'));
 
     // - MPBI ----------------------------------------------
-    f.read (&fourcc, 4);
-    f.read (&size, 4);
-
-    assert (fourcc == 'MPBI');
-
-    f.seekRelative (size);
+    f.seekRelative (read_wmo_chunk_size (f, "MPBI", 'MPBI'));
 
     // - MPBG ----------------------------------------------
-    f.read (&fourcc, 4);
-    f.read (&size, 4);
-
-    assert (fourcc == 'MPBG');
-
-    f.seekRelative (size);
+    f.seekRelative (read_wmo_chunk_size (f, "MPBG", 'MPBG'));
   }
   // - MOCV ----------------------------------------------
   if (header.flags.has_vertex_color)
   {
-    f.read (&fourcc, 4);
-    f.read (&size, 4);
-
-    assert (fourcc == 'MOCV');
-
-    load_mocv(f, size);
+    uint32_t const mocv_size (read_wmo_chunk_size (f, "MOCV", 'MOCV'));
+    load_mocv(f, mocv_size);
   }
   // - MLIQ ----------------------------------------------
   if (header.flags.has_water)
   {
-    f.read (&fourcc, 4);
-    f.read (&size, 4);
-
-    assert (fourcc == 'MLIQ');
+    uint32_t const mliq_size (read_wmo_chunk_size (f, "MLIQ", 'MLIQ'));
+    if (mliq_size < 0x1EU)
+    {
+      throw std::runtime_error ("WMO: truncated MLIQ header.");
+    }
 
     WMOLiquidHeader hlq;
-    f.read(&hlq, 0x1E);
+    if (f.read(&hlq, 0x1E) != 0x1E)
+    {
+      throw std::runtime_error ("WMO: truncated MLIQ header.");
+    }
 
+    if (hlq.material_id >= wmo->materials.size())
+    {
+      throw std::out_of_range ("WMO liquid material index out of range.");
+    }
     liquid = std::make_unique<wmo_liquid> ( &f
                                       , hlq
                                       , wmo->materials[hlq.material_id]
@@ -1032,56 +1269,38 @@ void WMOGroup::load()
                                       );
 
     // creating the wmo liquid doesn't move the position
-    f.seekRelative(size - 0x1E);
+    f.seekRelative(mliq_size - 0x1E);
   }
   if (header.flags.has_mori_morb)
   {
     // - MORI ----------------------------------------------
-    f.read (&fourcc, 4);
-    f.read (&size, 4);
-
-    assert (fourcc == 'MORI');
-
-    f.seekRelative (size);
+    f.seekRelative (read_wmo_chunk_size (f, "MORI", 'MORI'));
 
     // - MORB ----------------------------------------------
-    f.read(&fourcc, 4);
-    f.read(&size, 4);
-
-    assert(fourcc == 'MORB');
-
-    f.seekRelative(size);
+    f.seekRelative (read_wmo_chunk_size (f, "MORB", 'MORB'));
   }
 
   // - MOTV ----------------------------------------------
   if (header.flags.has_two_motv)
   {
-    f.read (&fourcc, 4);
-    f.read (&size, 4);
-
-    assert (fourcc == 'MOTV');
-
-    _texcoords_2.resize(size / sizeof(::math::vector_2d));
-    f.read(_texcoords_2.data(), size);
+    _texcoords_2 = read_wmo_chunk_vector<::math::vector_2d> (f, read_wmo_chunk_size (f, "MOTV", 'MOTV'), 1'000'000U, "MOTV");
   }
   // - MOCV ----------------------------------------------
   if (header.flags.use_mocv2_for_texture_blending)
   {
-    f.read (&fourcc, 4);
-    f.read (&size, 4);
+    std::vector<CImVector> const mocv_2 (read_wmo_chunk_vector<CImVector> (f, read_wmo_chunk_size (f, "MOCV", 'MOCV'), 1'000'000U, "MOCV"));
 
-    assert (fourcc == 'MOCV');
-
-    std::vector<CImVector> mocv_2(size / sizeof(CImVector));
-    f.read(mocv_2.data(), size);
-
-    for (int i = 0; i < mocv_2.size(); ++i)
+    for (size_t i = 0; i < mocv_2.size(); ++i)
     {
       float alpha = static_cast<float>(mocv_2[i].a) / 255.f;
 
       // the second mocv is used for texture blending only
       if (header.flags.has_vertex_color)
       {
+        if (i >= _vertex_colors.size())
+        {
+          throw std::runtime_error ("WMO: second MOCV larger than vertex colors.");
+        }
         _vertex_colors[i].w = alpha;
       }
       else // no vertex coloring, only texture blending with the alpha
@@ -1100,8 +1319,13 @@ void WMOGroup::load()
 
     for (auto doodad : _doodad_ref)
     {
+      size_t const doodad_index (static_cast<size_t>(doodad));
+      if (doodad_index >= wmo->modelis.size())
+      {
+        throw std::out_of_range ("WMO doodad ref out of range.");
+      }
       lenmin = 999999.0f * 999999.0f;
-      ModelInstance& mi = wmo->modelis[doodad];
+      ModelInstance& mi = wmo->modelis[doodad_index];
       for (unsigned int j = 0; j < wmo->lights.size(); j++)
       {
         WMOLight& l = wmo->lights[j];
@@ -1113,7 +1337,7 @@ void WMOGroup::load()
           dirmin = dir;
         }
       }
-      wmo->model_nearest_light_vector[doodad] = dirmin;
+      wmo->model_nearest_light_vector[doodad_index] = dirmin;
     }
 
     use_outdoor_lights = false;
@@ -1126,6 +1350,11 @@ void WMOGroup::load()
 
 void WMOGroup::load_mocv(MPQFile& f, uint32_t size)
 {
+  if (size % sizeof(uint32_t) != 0U || size / sizeof(uint32_t) > 1'000'000U)
+  {
+    throw std::runtime_error ("WMO: invalid MOCV size.");
+  }
+  f.require_range (f.getPos(), size);
   uint32_t const* colors = reinterpret_cast<uint32_t const*> (f.getPointer());
   _vertex_colors.resize(size / sizeof(uint32_t));
 
@@ -1140,6 +1369,10 @@ void WMOGroup::load_mocv(MPQFile& f, uint32_t size)
 
     if (header.transparency_batches_count > 0)
     {
+      if (static_cast<size_t>(header.transparency_batches_count) > _batches.size())
+      {
+        throw std::out_of_range ("WMO transparency batch index out of range.");
+      }
       interior_batchs_start = _batches[header.transparency_batches_count - 1].vertex_end + 1;
     }
 
@@ -1163,6 +1396,10 @@ void WMOGroup::fix_vertex_color_alpha()
 
   if (header.transparency_batches_count > 0)
   {
+    if (static_cast<size_t>(header.transparency_batches_count) > _batches.size())
+    {
+      throw std::out_of_range ("WMO transparency batch index out of range.");
+    }
     interior_batchs_start = _batches[header.transparency_batches_count - 1].vertex_end + 1;
   }
 

@@ -18,8 +18,11 @@
 #include <opengl/scoped.hpp>
 
 #include <algorithm>
+#include <cstdint>
 #include <iostream>
 #include <map>
+#include <stdexcept>
+#include <string>
 
 MapChunk::MapChunk(MapTile *maintile, MPQFile *f, bool bigAlpha, tile_mode mode)
   : _mode(mode)
@@ -33,14 +36,31 @@ MapChunk::MapChunk(MapTile *maintile, MPQFile *f, bool bigAlpha, tile_mode mode)
 
   _has_mccv = false;
 
+  auto require_chunk = [&](char const* name, uint32_t expected_fourcc) -> uint32_t
+  {
+    if (f->read(&fourcc, 4) != 4 || f->read(&size, 4) != 4)
+    {
+      throw std::runtime_error (std::string ("MapChunk: truncated ") + name + " chunk.");
+    }
+    if (fourcc != expected_fourcc)
+    {
+      throw std::runtime_error (std::string ("MapChunk: invalid ") + name + " chunk.");
+    }
+    if (size > f->remaining())
+    {
+      throw std::runtime_error (std::string ("MapChunk: implausible ") + name + " size.");
+    }
+    return size;
+  };
+
   // - MCNK ----------------------------------------------
   {
-    f->read(&fourcc, 4);
-    f->read(&size, 4);
+    require_chunk("MCNK", 'MCNK');
 
-    assert(fourcc == 'MCNK');
-
-    f->read(&header, 0x80);
+    if (f->read(&header, 0x80) != 0x80)
+    {
+      throw std::runtime_error ("MapChunk: truncated MCNK header.");
+    }
 
     _area_id = header.areaid;
 
@@ -64,10 +84,8 @@ MapChunk::MapChunk(MapTile *maintile, MPQFile *f, bool bigAlpha, tile_mode mode)
   // - MCVT ----------------------------------------------
   {
     f->seek(base + header.ofsHeight);
-    f->read(&fourcc, 4);
-    f->read(&size, 4);
-
-    assert(fourcc == 'MCVT');
+    require_chunk("MCVT", 'MCVT');
+    f->require_range(f->getPos(), 145 * 4);
 
     chunk_vertex* cv_ptr = vertices.data();
 
@@ -77,7 +95,10 @@ MapChunk::MapChunk(MapTile *maintile, MPQFile *f, bool bigAlpha, tile_mode mode)
       for (int i = 0; i < ((j % 2) ? 8 : 9); ++i)
       {
         float h, xpos, zpos;
-        f->read(&h, 4);
+        if (f->read(&h, 4) != 4)
+        {
+          throw std::runtime_error ("MapChunk: truncated MCVT data.");
+        }
         xpos = i * UNITSIZE;
         zpos = j * 0.5f * UNITSIZE;
         if (j % 2)
@@ -107,16 +128,17 @@ MapChunk::MapChunk(MapTile *maintile, MPQFile *f, bool bigAlpha, tile_mode mode)
   // - MCNR ----------------------------------------------
   {
     f->seek(base + header.ofsNormal);
-    f->read(&fourcc, 4);
-    f->read(&size, 4);
-
-    assert(fourcc == 'MCNR');
+    require_chunk("MCNR", 'MCNR');
+    f->require_range(f->getPos(), static_cast<size_t>(mapbufsize) * 3);
 
     char nor[3];
     chunk_vertex* cv_ptr = vertices.data();
     for (int i = 0; i< mapbufsize; ++i)
     {
-      f->read(nor, 3);
+      if (f->read(nor, 3) != 3)
+      {
+        throw std::runtime_error ("MapChunk: truncated MCNR data.");
+      }
       cv_ptr->normal = math::vector_3d(nor[0] / 127.0f, nor[2] / 127.0f, nor[1] / 127.0f);
       cv_ptr++;
     }
@@ -125,16 +147,17 @@ MapChunk::MapChunk(MapTile *maintile, MPQFile *f, bool bigAlpha, tile_mode mode)
   if(header.ofsShadow && header.sizeShadow)
   {
     f->seek(base + header.ofsShadow);
-    f->read(&fourcc, 4);
-    f->read(&size, 4);
-
-    assert(fourcc == 'MCSH');
+    require_chunk("MCSH", 'MCSH');
+    f->require_range(f->getPos(), 0x200);
 
     _chunk_shadow = std::make_unique<chunk_shadow>();
 
     // shadow map 64 x 64
-    f->read(_chunk_shadow.get(), 0x200);
-    f->seekRelative(-0x200);
+    if (f->read(_chunk_shadow.get(), 0x200) != 0x200)
+    {
+      throw std::runtime_error ("MapChunk: truncated MCSH data.");
+    }
+    f->seek(f->getPos() - 0x200);
 
     if (!header.flags.flags.do_not_fix_alpha_map)
     {
@@ -161,10 +184,8 @@ MapChunk::MapChunk(MapTile *maintile, MPQFile *f, bool bigAlpha, tile_mode mode)
   if(header.ofsMCCV)
   {
     f->seek(base + header.ofsMCCV);
-    f->read(&fourcc, 4);
-    f->read(&size, 4);
-
-    assert(fourcc == 'MCCV');
+    require_chunk("MCCV", 'MCCV');
+    f->require_range(f->getPos(), static_cast<size_t>(mapbufsize) * 4);
 
     if (!(header.flags.flags.has_mccv))
     {
@@ -176,7 +197,10 @@ MapChunk::MapChunk(MapTile *maintile, MPQFile *f, bool bigAlpha, tile_mode mode)
     unsigned char t[4];
     for (int i = 0; i < mapbufsize; ++i)
     {
-      f->read(t, 4);
+      if (f->read(t, 4) != 4)
+      {
+        throw std::runtime_error ("MapChunk: truncated MCCV data.");
+      }
       vertices[i].color = math::vector_3d((float)t[2] / 127.0f, (float)t[1] / 127.0f, (float)t[0] / 127.0f);
     }
   }
@@ -193,14 +217,29 @@ MapChunk::MapChunk(MapTile *maintile, MPQFile *f, bool bigAlpha, tile_mode mode)
   {
     f->seek(base + header.ofsLiquid);
 
-    f->read(&fourcc, 4);
+    if (f->read(&fourcc, 4) != 4)
+    {
+      throw std::runtime_error ("MapChunk: truncated MCLQ chunk.");
+    }
     f->seekRelative(4); // ignore the size here, the valid size is in the header
 
-    assert(fourcc == 'MCLQ');
+    if (fourcc != 'MCLQ')
+    {
+      throw std::runtime_error ("MapChunk: invalid MCLQ chunk.");
+    }
 
-    int layer_count = (header.sizeLiquid - 8) / sizeof(mclq);
+    std::uint64_t const liquid_bytes = static_cast<std::uint64_t>(header.sizeLiquid) - 8U;
+    if (liquid_bytes % sizeof(mclq) != 0U || liquid_bytes / sizeof(mclq) > 64U
+      || liquid_bytes > f->remaining())
+    {
+      throw std::runtime_error ("MapChunk: invalid MCLQ layer count.");
+    }
+    size_t const layer_count = static_cast<size_t>(liquid_bytes / sizeof(mclq));
     std::vector<mclq> layers(layer_count);
-    f->read(layers.data(), sizeof(mclq)*layer_count);
+    if (!layers.empty() && f->read(layers.data(), sizeof(mclq) * layer_count) != sizeof(mclq) * layer_count)
+    {
+      throw std::runtime_error ("MapChunk: truncated MCLQ data.");
+    }
 
     mt->Water.getChunk(px, py)->from_mclq(layers);
     // remove the liquid flags as it'll be saved as MH2O

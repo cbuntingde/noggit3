@@ -116,28 +116,59 @@ namespace opengl
   program::program (program&& other)
   {
     std::swap (_handle, other._handle);
+    _uniform_location_cache = std::move (other._uniform_location_cache);
+    _attrib_location_cache = std::move (other._attrib_location_cache);
+    _uniform_block_cache = std::move (other._uniform_block_cache);
   }
   program::~program()
   {
+    // Never call GL directly here: programs are owned by World and may be
+    // destroyed with no GL context current, where deleteProgram throws.
+    // The render loop runs the queued deletion.
     if (_handle)
     {
-      gl.deleteProgram (*_handle);
+      GLuint const handle (*_handle);
+      defer_gl_delete ([handle]
+        {
+          GLuint tmp (handle);
+          gl.deleteProgram (tmp);
+        });
     }
   }
 
-  //! \todo cache lookups?
   GLuint program::uniform_location (std::string const& name) const
   {
-    return gl.getUniformLocation (*_handle, name.c_str());
+    auto it (_uniform_location_cache.find (name));
+    if (it != _uniform_location_cache.end())
+    {
+      return it->second;
+    }
+    GLuint const location (gl.getUniformLocation (*_handle, name.c_str()));
+    _uniform_location_cache.emplace (name, location);
+    return location;
   }
   GLuint program::attrib_location (std::string const& name) const
   {
-    return gl.getAttribLocation (*_handle, name.c_str());
+    auto it (_attrib_location_cache.find (name));
+    if (it != _attrib_location_cache.end())
+    {
+      return it->second;
+    }
+    GLuint const location (gl.getAttribLocation (*_handle, name.c_str()));
+    _attrib_location_cache.emplace (name, location);
+    return location;
   }
 
   GLuint program::uniform_block_index(std::string const& name) const
   {
-    return gl.getUniformBlockIndex(*_handle, name.c_str());
+    auto it (_uniform_block_cache.find (name));
+    if (it != _uniform_block_cache.end())
+    {
+      return it->second;
+    }
+    GLuint const index (gl.getUniformBlockIndex(*_handle, name.c_str()));
+    _uniform_block_cache.emplace (name, index);
+    return index;
   }
   void program::uniform_block_binding(GLuint block_index, GLuint block_binding) const
   {

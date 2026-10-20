@@ -6,6 +6,8 @@
 
 #include <QtGui/QOpenGLFunctions_4_1_Core>
 
+#include <functional>
+
 namespace opengl
 {
   // The caller guarantees that the index buffer is already bound.
@@ -209,6 +211,18 @@ namespace opengl
     template<GLenum target, typename T>
       void bufferData(GLuint buffer, std::vector<T> const& data, GLenum usage);
   };
+
+  //! Queue a GL deletion to run on the render thread. GL object destructors
+  //! may run on any thread (cache eviction, tile unload, shutdown), where no
+  //! GL context is current and direct deletion would throw. Enqueue instead;
+  //! the render loop runs the queue via process_pending_gl_deletions().
+  //! Thread-safe: may be called from any thread. Never throws: on enqueue
+  //! failure the deletion is dropped (leaking one GL name) and logged.
+  void defer_gl_delete (std::function<void()> deletion) noexcept;
+
+  //! Run all queued GL deletions. Must be called on the render thread with
+  //! a GL context current (e.g. at the top of MapView::paintGL).
+  void process_pending_gl_deletions();
 }
 
 extern opengl::context gl;

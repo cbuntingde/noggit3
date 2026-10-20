@@ -36,27 +36,45 @@ namespace noggit
     {
       std::string const normalized (_normalize (filename));
 
+      T* obj = nullptr;
+      bool const is_new = [&]
       {
-        std::scoped_lock const lock(_mutex);
+        std::scoped_lock lock(_mutex);
 
-        if ([&] { return _counts[normalized]++; }())
+        auto count_it (_counts.find (normalized));
+        if (count_it != _counts.end() && count_it->second > 0)
         {
-          return &_elements.at (normalized);
+          ++count_it->second;
+          auto element_it (_elements.find (normalized));
+          // Invariant: a positive count implies a live element.
+          // Repair instead of throwing when the maps disagree.
+          if (element_it == _elements.end())
+          {
+            auto emplaced (_elements.emplace ( std::piecewise_construct
+                                            , std::forward_as_tuple (normalized)
+                                            , std::forward_as_tuple (normalized, args...)
+                                            ));
+            count_it->second = 1;
+            obj = &emplaced.first->second;
+            return true;
+          }
+          obj = &element_it->second;
+          return false;
         }
+
+        auto emplaced (_elements.emplace ( std::piecewise_construct
+                                          , std::forward_as_tuple (normalized)
+                                          , std::forward_as_tuple (normalized, args...)
+                                          ));
+        _counts[normalized] = 1;
+        obj = &emplaced.first->second;
+        return true;
+      }();
+
+      if (is_new && AsyncLoader::instance)
+      {
+        AsyncLoader::instance->queue_for_load(static_cast<AsyncObject*>(obj));
       }
-
-
-      T* const obj ( [&]
-                     {
-                       std::scoped_lock const lock(_mutex);
-                       return &_elements.emplace ( std::piecewise_construct
-                                                 , std::forward_as_tuple (normalized)
-                                                 , std::forward_as_tuple (normalized, args...)
-                                                 ).first->second;
-                     }()
-                   );
-
-      AsyncLoader::instance->queue_for_load(static_cast<AsyncObject*>(obj));
 
       return obj;
     }
@@ -68,25 +86,37 @@ namespace noggit
       {
         std::scoped_lock lock(_mutex);
 
-        if (--_counts.at (normalized) == 0)
+        auto count_it (_counts.find (normalized));
+        if (count_it == _counts.end() || count_it->second == 0)
         {
-          obj = static_cast<AsyncObject*>(&_elements.at(normalized));
+          return;
         }
+
+        if (--count_it->second != 0)
+        {
+          return;
+        }
+
+        auto element_it (_elements.find (normalized));
+        if (element_it == _elements.end())
+        {
+          _counts.erase (count_it);
+          return;
+        }
+
+        obj = static_cast<AsyncObject*>(&element_it->second);
       }
 
-      if (obj)
+      // always make sure an async object can be deleted before deleting it
+      if (AsyncLoader::instance && !obj->finishedLoading())
       {
-        // always make sure an async object can be deleted before deleting it
-        if (!obj->finishedLoading())
-        {
-          AsyncLoader::instance->ensure_deletable(obj);
-        }
+        AsyncLoader::instance->ensure_deletable(obj);
+      }
 
-        {
-          std::scoped_lock lock(_mutex);
-          _elements.erase (normalized);
-          _counts.erase (normalized);
-        }
+      {
+        std::scoped_lock lock(_mutex);
+        _elements.erase (normalized);
+        _counts.erase (normalized);
       }
     }
     void apply (std::function<void (std::string const&, T&)> fun)

@@ -1300,11 +1300,9 @@ void World::draw ( math::matrix_4x4 const& model_view
     wmo_group_uniform_data wmo_uniform_data;
 
 
-    // liquid list updated only when the transform buffers are updated
-    if (update_transform_buffers)
-    {
-      _wmo_liquids_to_draw.clear();
-    }
+    // The instanced draw below appends to this list; it must start empty
+    // every frame or liquids accumulate and draw repeatedly.
+    _wmo_liquids_to_draw.clear();
 
     for (auto& it : _wmos_by_filename)
     {

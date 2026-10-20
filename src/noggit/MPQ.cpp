@@ -5,6 +5,8 @@
 #include <noggit/MPQ.h>
 #include <noggit/settings.hpp>
 
+#include <limits>
+
 #include <algorithm>
 #include <cstdint>
 #include <cstdio>
@@ -144,6 +146,7 @@ void MPQArchive::unloadMPQ(std::string const& filename)
     if (it->first == filename)
     {
       _openArchives.erase(it);
+      break;
     }
   }
 }
@@ -186,6 +189,11 @@ MPQFile::MPQFile(std::string const& filename)
   if (filename.empty())
     throw std::runtime_error("MPQFile: filename empty");
 
+  if (!noggit::mpq::is_safe_normalized_filename (_filename))
+  {
+    throw std::invalid_argument ("File '" + filename + "' escapes the project directory.");
+  }
+
   std::ifstream input(_disk_path.string(), std::ios_base::binary | std::ios_base::in);
   if (input.is_open())
   {
@@ -193,7 +201,17 @@ MPQFile::MPQFile(std::string const& filename)
     eof = false;
 
     input.seekg(0, std::ios::end);
-    buffer.resize (input.tellg());
+    auto const disk_size (input.tellg());
+    if (disk_size < 0)
+    {
+      throw std::runtime_error ("File '" + filename + "' has an unreadable size.");
+    }
+    static constexpr std::uintmax_t max_file_bytes = 512ULL * 1024ULL * 1024ULL;
+    if (static_cast<std::uintmax_t> (disk_size) > max_file_bytes)
+    {
+      throw std::runtime_error ("File '" + filename + "' exceeds the 512 MiB safety cap.");
+    }
+    buffer.resize (static_cast<size_t> (disk_size));
     input.seekg(0, std::ios::beg);
 
     input.read(buffer.data(), buffer.size());
@@ -212,7 +230,16 @@ MPQFile::MPQFile(std::string const& filename)
       continue;
 
     eof = false;
-    buffer.resize (SFileGetFileSize(fileHandle, nullptr));
+    {
+      std::uint32_t const archived_size (SFileGetFileSize (fileHandle, nullptr));
+      static constexpr std::uint32_t max_archive_bytes = 512U * 1024U * 1024U;
+      if (archived_size > max_archive_bytes)
+      {
+        SFileCloseFile (fileHandle);
+        throw std::runtime_error ("File '" + filename + "' exceeds the 512 MiB safety cap.");
+      }
+      buffer.resize (archived_size);
+    }
     SFileReadFile(fileHandle, buffer.data(), buffer.size(), nullptr, nullptr); //last nullptrs for newer version of StormLib
     SFileCloseFile(fileHandle);
 
@@ -275,14 +302,41 @@ bool MPQFile::isEof() const
 
 void MPQFile::seek(size_t offset)
 {
+  if (offset > buffer.size())
+  {
+    throw std::out_of_range ("MPQFile::seek past end of '" + _filename + "'");
+  }
   pointer = offset;
   eof = (pointer >= buffer.size());
 }
 
 void MPQFile::seekRelative(size_t offset)
 {
+  if (offset > buffer.size() || pointer > buffer.size() - offset)
+  {
+    throw std::out_of_range ("MPQFile::seekRelative past end of '" + _filename + "'");
+  }
   pointer += offset;
   eof = (pointer >= buffer.size());
+}
+
+size_t MPQFile::remaining() const
+{
+  return pointer >= buffer.size() ? 0U : buffer.size() - pointer;
+}
+
+void MPQFile::require_range(size_t offset, size_t bytes) const
+{
+  if (bytes > buffer.size() || offset > buffer.size() - bytes)
+  {
+    throw std::out_of_range ("MPQFile::range past end of '" + _filename + "'");
+  }
+}
+
+char const* MPQFile::getPointerAt(size_t offset) const
+{
+  require_range(offset, 1U);
+  return buffer.data() + offset;
 }
 
 void MPQFile::close()
@@ -307,6 +361,10 @@ char const* MPQFile::getBuffer() const
 
 char const* MPQFile::getPointer() const
 {
+  if (pointer > buffer.size())
+  {
+    throw std::out_of_range ("MPQFile::getPointer past end of '" + _filename + "'");
+  }
   return buffer.data() + pointer;
 }
 
@@ -408,6 +466,31 @@ namespace noggit
     {
       std::transform (filename.begin(), filename.end(), filename.begin(), to_upper_slash);
       return filename;
+    }
+
+    bool is_safe_normalized_filename (std::string const& normalized)
+    {
+      if (normalized.empty() || normalized.size() > 260U)
+      {
+        return false;
+      }
+
+      std::filesystem::path const path (normalized);
+      if (path.is_absolute())
+      {
+        return false;
+      }
+
+      for (auto const& part : path)
+      {
+        auto const text (part.string());
+        if (text.empty() || text == "." || text == ".." || text.find (':') != std::string::npos)
+        {
+          return false;
+        }
+      }
+
+      return true;
     }
   }
 }

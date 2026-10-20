@@ -6,8 +6,10 @@
 
 #include <StormLib.h>
 
+#include <cstring>
 #include <filesystem>
 #include <set>
+#include <stdexcept>
 #include <string>
 #include <unordered_set>
 #include <vector>
@@ -74,6 +76,15 @@ public:
   void seek(size_t offset);
   void seekRelative(size_t offset);
   void close();
+
+  //! Bytes available from the current cursor to the end of the buffer.
+  size_t remaining() const;
+  //! Throw std::out_of_range when [offset, offset + bytes) is not fully inside the buffer.
+  void require_range(size_t offset, size_t bytes) const;
+  //! Checked random access: throws std::out_of_range on any out-of-bounds access.
+  char const* getPointerAt(size_t offset) const;
+  template<typename T>
+  T read_at(size_t offset) const;
   bool isExternal() const
   {
     return External;
@@ -82,6 +93,7 @@ public:
   template<typename T>
   const T* get(size_t offset) const
   {
+    require_range(offset, sizeof(T));
     return reinterpret_cast<T const*>(buffer.data() + offset);
   }
 
@@ -107,5 +119,16 @@ namespace noggit
   {
     std::string normalized_filename (std::string filename);
     std::string normalized_filename_insane (std::string filename);
+    //! True when a normalized project-relative name cannot escape the project dir.
+    bool is_safe_normalized_filename (std::string const& normalized);
   }
+}
+
+template<typename T>
+T MPQFile::read_at(size_t offset) const
+{
+  require_range(offset, sizeof(T));
+  T value;
+  std::memcpy(&value, buffer.data() + offset, sizeof(T));
+  return value;
 }

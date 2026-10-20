@@ -13,6 +13,7 @@
 
 #include <functional>
 #include <memory>
+#include <mutex>
 #include <string>
 #include <vector>
 
@@ -24,6 +25,53 @@ opengl::context gl;
 
 namespace opengl
 {
+  namespace
+  {
+    std::mutex pending_gl_deletion_mutex;
+    std::vector<std::function<void()>> pending_gl_deletions;
+  }
+
+  void defer_gl_delete (std::function<void()> deletion) noexcept
+  {
+    if (!deletion)
+    {
+      return;
+    }
+    try
+    {
+      std::scoped_lock lock (pending_gl_deletion_mutex);
+      pending_gl_deletions.push_back (std::move (deletion));
+    }
+    catch (std::exception const& e)
+    {
+      LogError << "deferred GL deletion dropped (enqueue failed): " << e.what() << std::endl;
+    }
+    catch (...)
+    {
+      LogError << "deferred GL deletion dropped (enqueue failed)" << std::endl;
+    }
+  }
+
+  void process_pending_gl_deletions()
+  {
+    std::vector<std::function<void()>> deletions;
+    {
+      std::scoped_lock lock (pending_gl_deletion_mutex);
+      deletions.swap (pending_gl_deletions);
+    }
+    for (auto& deletion : deletions)
+    {
+      try
+      {
+        deletion();
+      }
+      catch (std::exception const& e)
+      {
+        LogError << "deferred GL deletion failed: " << e.what() << std::endl;
+      }
+    }
+  }
+
   namespace
   {
     std::size_t inside_gl_begin_end = 0;

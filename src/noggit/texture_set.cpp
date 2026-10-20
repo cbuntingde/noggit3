@@ -11,7 +11,9 @@
 #include <noggit/MapChunk.h>
 
 #include <algorithm>    // std::min
+#include <cstdint>
 #include <iostream>     // std::cout
+#include <stdexcept>
 
 
 TextureSet::TextureSet ( MapChunkHeader const& header
@@ -36,14 +38,26 @@ TextureSet::TextureSet ( MapChunkHeader const& header
     _lod_texture_map.push_back(((header.low_quality_texture_map[array_index]) >> (bit_index)) & 3);
   }
 
+  if (nTextures > 4)
+  {
+    throw std::runtime_error ("TextureSet: too many layers.");
+  }
+
   if (nTextures)
   {
     f->seek(base + header.ofsLayer + 8);
 
     for (size_t i = 0; i<nTextures; ++i)
     {
-      f->read (&_layers_info[i], sizeof(ENTRY_MCLY));
+      if (f->read (&_layers_info[i], sizeof(ENTRY_MCLY)) != sizeof(ENTRY_MCLY))
+      {
+        throw std::runtime_error ("TextureSet: truncated MCLY.");
+      }
 
+      if (_layers_info[i].textureID >= tile->mTextureFilenames.size())
+      {
+        throw std::out_of_range ("TextureSet: textureID out of range.");
+      }
       _textures.push_back(tile->mTextureFilenames[_layers_info[i].textureID]);
     }
 
@@ -53,10 +67,23 @@ TextureSet::TextureSet ( MapChunkHeader const& header
     {
       if (_layers_info[layer].flags & 0x100)
       {
-        int layer_size = (layer == nTextures - 1)
-          ? header.sizeAlpha - 8 - _layers_info[layer].ofsAlpha
-          : _layers_info[layer+1].ofsAlpha - _layers_info[layer].ofsAlpha
-          ;
+        if (_layers_info[layer].ofsAlpha > header.sizeAlpha)
+        {
+          throw std::out_of_range ("TextureSet: ofsAlpha out of range.");
+        }
+        std::uint64_t const next_ofs = (layer == nTextures - 1)
+          ? static_cast<std::uint64_t>(header.sizeAlpha > 8 ? header.sizeAlpha - 8 : 0)
+          : _layers_info[layer + 1].ofsAlpha;
+        if (next_ofs < _layers_info[layer].ofsAlpha)
+        {
+          throw std::runtime_error ("TextureSet: invalid alpha offsets.");
+        }
+        std::uint64_t const layer_size_64 = next_ofs - _layers_info[layer].ofsAlpha;
+        if (layer_size_64 > 65536ULL)
+        {
+          throw std::runtime_error ("TextureSet: implausible alpha size.");
+        }
+        int layer_size = static_cast<int>(layer_size_64);
 
         // make sure to load using the right alphamap format
         // todo: mark adt as changed if the format doesn't match

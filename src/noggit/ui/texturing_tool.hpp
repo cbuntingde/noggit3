@@ -83,6 +83,11 @@ namespace noggit
       virtual void mouse_move_event(QLineF const& relative_movement) override;
       virtual void wheel_event(QWheelEvent* event) override;
 
+      //! Drop the texture picker's cached chunk when its tile is gone.
+      //! Called from the view tick after tile unloads, which run even when
+      //! this tool is not active while the picker window stays open.
+      void revalidate_picker(World* world);
+
     private:
       void change_tex_flag(World* world, math::vector_3d const& pos, bool add, scoped_blp_texture_reference texture);
 

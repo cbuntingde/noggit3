@@ -30,6 +30,10 @@ namespace noggit
       std::vector<std::shared_ptr<script_brush>> &get_scripts();
       sol::table require(std::string const& path);
       void execute_file(std::string const& filename);
+      //! Directory of the script currently executing (top of the require
+      //! stack), or "scripts" when no script is running. Used to sandbox
+      //! script file access.
+      std::string current_script_dir();
       std::string file_to_module(std::string const& file);
       std::string module_to_file(std::string const& module);
     private:
