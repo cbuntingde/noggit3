@@ -90,11 +90,45 @@ public:
     return External;
   }
 
+  //! Checked random access to a single element of type T. The offset has to
+  //! be aligned for T; use read_array() for data whose alignment the file
+  //! does not guarantee.
   template<typename T>
   const T* get(size_t offset) const
   {
     require_range(offset, sizeof(T));
+    if (offset % alignof(T) != 0)
+      throw std::out_of_range ("MPQFile::unaligned access to '" + _filename + "'");
     return reinterpret_cast<T const*>(buffer.data() + offset);
+  }
+
+  //! Checked random access to an array of `count` elements of type T.
+  //! Throws std::out_of_range when [offset, offset + count * sizeof(T)) is not
+  //! fully inside the buffer. Returns nullptr for an empty array.
+  template<typename T>
+  T const* get_array(size_t offset, size_t count) const
+  {
+    if (!count)
+      return nullptr;
+    if (count > buffer.size() / sizeof(T))
+      throw std::out_of_range ("MPQFile::array past end of '" + _filename + "'");
+    require_range(offset, count * sizeof(T));
+    return reinterpret_cast<T const*>(buffer.data() + offset);
+  }
+
+  //! Read `count` elements of type T starting at `offset` into `dest`.
+  //! Unlike get_array() this copies the data, so it is also safe for element
+  //! types whose alignment the file offset does not satisfy.
+  //! Throws std::out_of_range when the range is not fully inside the buffer.
+  template<typename T>
+  void read_array(size_t offset, size_t count, T* dest) const
+  {
+    if (!count)
+      return;
+    if (count > buffer.size() / sizeof(T))
+      throw std::out_of_range ("MPQFile::array past end of '" + _filename + "'");
+    require_range(offset, count * sizeof(T));
+    std::memcpy(dest, buffer.data() + offset, count * sizeof(T));
   }
 
   void setBuffer (std::vector<char> const& vec)

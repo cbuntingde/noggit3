@@ -142,6 +142,18 @@ namespace opengl
 
       ~verify_context_and_check_for_gl_errors()
       {
+        // a destructor must not throw: doing so would call std::terminate.
+        // The errors are still reported, use check_for_gl_errors() to get an
+        // exception instead.
+        check_for_gl_errors (false);
+      }
+
+      //! Check for OpenGL errors and report them. Throws when
+      //! NOGGIT_THROW_ON_OPENGL_ERRORS is defined, unless `may_throw` is
+      //! false - which is the case when called from the destructor.
+      void check_for_gl_errors (bool may_throw = true)
+      {
+        (void)may_throw;
 #ifndef NOGGIT_DO_NOT_CHECK_FOR_OPENGL_ERRORS
         if (inside_gl_begin_end)
         {
@@ -179,7 +191,10 @@ namespace opengl
           errors += _extra_info();
           LogError << _function << ":" + errors << std::endl;
 #ifdef NOGGIT_THROW_ON_OPENGL_ERRORS
-          throw std::runtime_error (std::string (_function) + ":" + errors);
+          if (may_throw)
+          {
+            throw std::runtime_error (std::string (_function) + ":" + errors);
+          }
 #endif
         }
 #endif

@@ -131,7 +131,10 @@ void MapTile::finishLoading()
 
   for (int i = 0; i < 256; ++i)
   {
-    theFile.read(&lMCNKOffsets[i], 4);
+    if (theFile.read(&lMCNKOffsets[i], 4) != 4)
+    {
+      throw std::runtime_error("ADT has a truncated MCIN chunk.");
+    }
     theFile.seekRelative(0xC);
   }
 
@@ -454,8 +457,9 @@ void MapTile::finishLoading()
   // - Really done. --------------------------------------
 
   LogDebug << "Done loading tile " << index.x << "," << index.z << "." << std::endl;
-  finished = true;
   _tile_is_being_reloaded = false;
+  // publish "loaded" only after the tile is not touched any more
+  finished = true;
   _state_changed.notify_all();
 }
 

@@ -15,6 +15,7 @@
 #include <map>
 #include <optional>
 #include <sstream>
+#include <stdexcept>
 #include <string>
 
 opengl_model_state_changer::opengl_model_state_changer()
@@ -207,6 +208,11 @@ void Model::finishLoading()
     return;
   }
 
+  if (f.getSize() < sizeof(ModelHeader))
+  {
+    throw std::runtime_error ("Model file \"" + filename + "\" is too small to contain a header.");
+  }
+
   memcpy(&header, f.getBuffer(), sizeof(ModelHeader));
 
   // pre-Wrath M2 (version < 264) uses a different header, inline skin profiles
@@ -215,6 +221,10 @@ void Model::finishLoading()
   if (_vanilla)
   {
     ModelHeaderVanilla vanilla_header;
+    if (f.getSize() < sizeof(ModelHeaderVanilla))
+    {
+      throw std::runtime_error ("Model file \"" + filename + "\" is too small to contain a header.");
+    }
     memcpy(&vanilla_header, f.getBuffer(), sizeof(ModelHeaderVanilla));
     normalize_vanilla_header(vanilla_header, header);
     _skin_profile_ofs = vanilla_header.ofsSkinProfiles;
@@ -225,7 +235,7 @@ void Model::finishLoading()
   if (!_vanilla && (header.Flags & 8))
   {
     // go to the end of the header (where the blend override data is)
-    uint32_t const* blend_override_info = reinterpret_cast<uint32_t const*>(f.getBuffer() + sizeof(ModelHeader));
+    uint32_t const* blend_override_info = f.get_array<uint32_t>(sizeof(ModelHeader), 2);
     uint32_t n_blend_override = *blend_override_info++;
     uint32_t ofs_blend_override = *blend_override_info;
 
@@ -267,7 +277,7 @@ void Model::finishLoading()
 // WotLK-shaped counterparts, so the existing loaders can consume them
 void Model::load_vanilla_defs(const MPQFile& f)
 {
-  ModelBoneDefVanilla const* vbones = reinterpret_cast<ModelBoneDefVanilla const*>(f.getBuffer() + header.ofsBones);
+  ModelBoneDefVanilla const* vbones = f.get_array<ModelBoneDefVanilla>(header.ofsBones, header.nBones);
   _vanilla_bone_defs.resize(header.nBones);
   for (size_t i = 0; i < header.nBones; ++i)
   {
@@ -284,7 +294,7 @@ void Model::load_vanilla_defs(const MPQFile& f)
     bone.pivot = vbones[i].pivot;
   }
 
-  ModelColorDefVanilla const* vcolors = reinterpret_cast<ModelColorDefVanilla const*>(f.getBuffer() + header.ofsColors);
+  ModelColorDefVanilla const* vcolors = f.get_array<ModelColorDefVanilla>(header.ofsColors, header.nColors);
   _vanilla_color_defs.resize(header.nColors);
   for (size_t i = 0; i < header.nColors; ++i)
   {
@@ -292,14 +302,14 @@ void Model::load_vanilla_defs(const MPQFile& f)
     _vanilla_color_defs[i].opacity = to_wotlk_block(vcolors[i].opacity);
   }
 
-  ModelTransDefVanilla const* vtrans = reinterpret_cast<ModelTransDefVanilla const*>(f.getBuffer() + header.ofsTransparency);
+  ModelTransDefVanilla const* vtrans = f.get_array<ModelTransDefVanilla>(header.ofsTransparency, header.nTransparency);
   _vanilla_trans_defs.resize(header.nTransparency);
   for (size_t i = 0; i < header.nTransparency; ++i)
   {
     _vanilla_trans_defs[i].trans = to_wotlk_block(vtrans[i].trans);
   }
 
-  ModelTexAnimDefVanilla const* vtexanims = reinterpret_cast<ModelTexAnimDefVanilla const*>(f.getBuffer() + header.ofsTexAnims);
+  ModelTexAnimDefVanilla const* vtexanims = f.get_array<ModelTexAnimDefVanilla>(header.ofsTexAnims, header.nTexAnims);
   _vanilla_texanim_defs.resize(header.nTexAnims);
   for (size_t i = 0; i < header.nTexAnims; ++i)
   {
@@ -308,7 +318,7 @@ void Model::load_vanilla_defs(const MPQFile& f)
     _vanilla_texanim_defs[i].scale = to_wotlk_block(vtexanims[i].scale);
   }
 
-  ModelLightDefVanilla const* vlights = reinterpret_cast<ModelLightDefVanilla const*>(f.getBuffer() + header.ofsLights);
+  ModelLightDefVanilla const* vlights = f.get_array<ModelLightDefVanilla>(header.ofsLights, header.nLights);
   _vanilla_light_defs.resize(header.nLights);
   for (size_t i = 0; i < header.nLights; ++i)
   {
@@ -325,7 +335,7 @@ void Model::load_vanilla_defs(const MPQFile& f)
     light.Enabled = empty_block();
   }
 
-  ModelRibbonEmitterDefVanilla const* vribbons = reinterpret_cast<ModelRibbonEmitterDefVanilla const*>(f.getBuffer() + header.ofsRibbonEmitters);
+  ModelRibbonEmitterDefVanilla const* vribbons = f.get_array<ModelRibbonEmitterDefVanilla>(header.ofsRibbonEmitters, header.nRibbonEmitters);
   _vanilla_ribbon_defs.resize(header.nRibbonEmitters);
   for (size_t i = 0; i < header.nRibbonEmitters; ++i)
   {
@@ -351,7 +361,7 @@ void Model::load_vanilla_defs(const MPQFile& f)
     ribbon.unknown = vribbons[i].unknown;
   }
 
-  ModelParticleEmitterDefVanilla const* vparticles = reinterpret_cast<ModelParticleEmitterDefVanilla const*>(f.getBuffer() + header.ofsParticleEmitters);
+  ModelParticleEmitterDefVanilla const* vparticles = f.get_array<ModelParticleEmitterDefVanilla>(header.ofsParticleEmitters, header.nParticleEmitters);
   _vanilla_particle_defs.resize(header.nParticleEmitters);
   _vanilla_particle_params.resize(header.nParticleEmitters);
   for (size_t i = 0; i < header.nParticleEmitters; ++i)
@@ -416,19 +426,21 @@ bool Model::isAnimated(const MPQFile& f)
 {
   // see if we have any animated bones
   ModelBoneDef const* bo = _vanilla ? _vanilla_bone_defs.data()
-                                   : reinterpret_cast<ModelBoneDef const*>(f.getBuffer() + header.ofsBones);
+                                   : f.get_array<ModelBoneDef>(header.ofsBones, header.nBones);
 
   animGeometry = false;
   animBones = false;
   _per_instance_animation = false;
 
-  ModelVertex const* verts = reinterpret_cast<ModelVertex const*>(f.getBuffer() + header.ofsVertices);
+  ModelVertex const* verts = f.get_array<ModelVertex>(header.ofsVertices, header.nVertices);
   for (size_t i = 0; i<header.nVertices && !animGeometry; ++i)
   {
     for (size_t b = 0; b<4; b++)
     {
       if (verts[i].weights[b]>0)
       {
+        if (verts[i].bones[b] >= header.nBones)
+          throw std::out_of_range ("M2: vertex refers to a bone outside the model");
         ModelBoneDef const& bb = bo[verts[i].bones[b]];
         bool billboard = (bb.flags & (0x78)); // billboard | billboard_lock_[xyz]
 
@@ -469,7 +481,7 @@ bool Model::isAnimated(const MPQFile& f)
   if (header.nColors)
   {
     ModelColorDef const* cols = _vanilla ? _vanilla_color_defs.data()
-                                         : reinterpret_cast<ModelColorDef const*>(f.getBuffer() + header.ofsColors);
+                                         : f.get_array<ModelColorDef>(header.ofsColors, header.nColors);
     for (size_t i = 0; i<header.nColors; ++i)
     {
       if (cols[i].color.type != 0 || cols[i].opacity.type != 0)
@@ -483,7 +495,7 @@ bool Model::isAnimated(const MPQFile& f)
   if (header.nTransparency)
   {
     ModelTransDef const* trs = _vanilla ? _vanilla_trans_defs.data()
-                                      : reinterpret_cast<ModelTransDef const*>(f.getBuffer() + header.ofsTransparency);
+                                      : f.get_array<ModelTransDef>(header.ofsTransparency, header.nTransparency);
     for (size_t i = 0; i<header.nTransparency; ++i)
     {
       if (trs[i].trans.type != 0)
@@ -517,6 +529,21 @@ namespace
 }
 
 
+namespace
+{
+  //! Bounds-checked access to an array of `count` elements of type T inside a
+  //! raw file buffer. Throws std::out_of_range when the array does not fit.
+  template<typename T>
+  T const* checked_array(char const* buffer, size_t buffer_size, size_t offset, size_t count)
+  {
+    if (!count)
+      return nullptr;
+    if (offset > buffer_size || count > (buffer_size - offset) / sizeof(T))
+      throw std::out_of_range ("M2: array past end of file");
+    return reinterpret_cast<T const*>(buffer + offset);
+  }
+}
+
 void Model::initCommon(const MPQFile& f)
 {
   // vertices, normals, texcoords
@@ -534,7 +561,7 @@ void Model::initCommon(const MPQFile& f)
   }
 
   // textures
-  ModelTextureDef const* texdef = reinterpret_cast<ModelTextureDef const*>(f.getBuffer() + header.ofsTextures);
+  ModelTextureDef const* texdef = f.get_array<ModelTextureDef>(header.ofsTextures, header.nTextures);
   _textureFilenames.resize(header.nTextures);
   _specialTextures.resize(header.nTextures);
 
@@ -549,10 +576,14 @@ void Model::initCommon(const MPQFile& f)
       }
 
       _specialTextures[i] = -1;
-      const char* blp_ptr = f.getBuffer() + texdef[i].nameOfs;
+      size_t const name_ofs = texdef[i].nameOfs;
+      size_t const name_len = texdef[i].nameLen;
+      if (name_ofs > f.getSize() || name_len > f.getSize() - name_ofs)
+        throw std::out_of_range ("M2: texture name lies outside the file");
+      const char* blp_ptr = f.getBuffer() + name_ofs;
       // some tools export the size without accounting for the \0
-      bool invalid_size = *(blp_ptr + texdef[i].nameLen-1) != '\0';
-      _textureFilenames[i] = std::string(blp_ptr, texdef[i].nameLen - (invalid_size ? 0 : 1));
+      bool invalid_size = *(blp_ptr + name_len - 1) != '\0';
+      _textureFilenames[i] = std::string(blp_ptr, name_len - (invalid_size ? 0 : 1));
     }
     else
     {
@@ -578,7 +609,7 @@ void Model::initCommon(const MPQFile& f)
   // init colors
   if (header.nColors) {
     ModelColorDef const* colorDefs = _vanilla ? _vanilla_color_defs.data()
-                                              : reinterpret_cast<ModelColorDef const*>(f.getBuffer() + header.ofsColors);
+                                              : f.get_array<ModelColorDef>(header.ofsColors, header.nColors);
     for (size_t i = 0; i < header.nColors; ++i)
     {
       _colors.emplace_back (f, colorDefs[i], _global_sequences.data());
@@ -590,7 +621,7 @@ void Model::initCommon(const MPQFile& f)
 
   if (header.nTransparency) {
     ModelTransDef const* trDefs = _vanilla ? _vanilla_trans_defs.data()
-                                           : reinterpret_cast<ModelTransDef const*>(f.getBuffer() + header.ofsTransparency);
+                                           : f.get_array<ModelTransDef>(header.ofsTransparency, header.nTransparency);
     for (size_t i = 0; i < header.nTransparency; ++i)
     {
       _transparency.emplace_back (f, trDefs[i], _global_sequences.data());
@@ -604,13 +635,14 @@ void Model::initCommon(const MPQFile& f)
     ModelView view_storage{};
     ModelView const* view = nullptr;
     char const* view_base = nullptr;
+    size_t view_base_size = 0;
     std::optional<MPQFile> skin_file;
 
     if (_vanilla)
     {
       // pre-Wrath keeps the skin profiles inline in the M2, there are no
       // separate .skin files to open (and the inline header has no signature)
-      ModelViewVanilla const* vanilla_view = reinterpret_cast<ModelViewVanilla const*>(f.getBuffer() + _skin_profile_ofs);
+      ModelViewVanilla const* vanilla_view = checked_array<ModelViewVanilla>(f.getBuffer(), f.getSize(), _skin_profile_ofs, 1);
       view_storage.n_index = vanilla_view->n_index;
       view_storage.ofs_index = vanilla_view->ofs_index;
       view_storage.n_triangle = vanilla_view->n_triangle;
@@ -625,6 +657,7 @@ void Model::initCommon(const MPQFile& f)
 
       view = &view_storage;
       view_base = f.getBuffer();
+      view_base_size = f.getSize();
     }
     else
     {
@@ -637,16 +670,19 @@ void Model::initCommon(const MPQFile& f)
       }
 
       skin_file.emplace(lodname);
-      view = reinterpret_cast<ModelView const*>(skin_file->getBuffer());
+      view = checked_array<ModelView>(skin_file->getBuffer(), skin_file->getSize(), 0, 1);
       view_base = skin_file->getBuffer();
+      view_base_size = skin_file->getSize();
     }
 
-    uint16_t const* indexLookup = reinterpret_cast<uint16_t const*>(view_base + view->ofs_index);
-    uint16_t const* triangles = reinterpret_cast<uint16_t const*>(view_base + view->ofs_triangle);
+    uint16_t const* indexLookup = checked_array<uint16_t>(view_base, view_base_size, view->ofs_index, view->n_index);
+    uint16_t const* triangles = checked_array<uint16_t>(view_base, view_base_size, view->ofs_triangle, view->n_triangle);
 
     _indices.resize (view->n_triangle);
 
     for (size_t i (0); i < _indices.size(); ++i) {
+      if (triangles[i] >= view->n_index)
+        throw std::out_of_range ("M2: triangle refers to a vertex outside the index lookup");
       _indices[i] = indexLookup[triangles[i]];
     }
 
@@ -659,7 +695,7 @@ void Model::initCommon(const MPQFile& f)
       // the vanilla skin section is 32 bytes (one center position, no sort
       // radius), not the WotLK-shaped 48
       ModelGeosetVanilla const* vanilla_geoset_defs
-        = reinterpret_cast<ModelGeosetVanilla const*>(view_base + view->ofs_submesh);
+        = checked_array<ModelGeosetVanilla>(view_base, view_base_size, view->ofs_submesh, view->n_submesh);
       vanilla_geosets.resize(view->n_submesh);
       for (size_t i = 0; i < view->n_submesh; ++i)
       {
@@ -683,10 +719,10 @@ void Model::initCommon(const MPQFile& f)
     }
     else
     {
-      model_geosets = reinterpret_cast<ModelGeoset const*>(view_base + view->ofs_submesh);
+      model_geosets = checked_array<ModelGeoset>(view_base, view_base_size, view->ofs_submesh, view->n_submesh);
     }
 
-    ModelTexUnit const* texture_unit = reinterpret_cast<ModelTexUnit const*>(view_base + view->ofs_texture_unit);
+    ModelTexUnit const* texture_unit = checked_array<ModelTexUnit>(view_base, view_base_size, view->ofs_texture_unit, view->n_texture_unit);
 
     _texture_lookup = M2Array<uint16_t>(f, header.ofsTexLookup, header.nTexLookup);
     _texture_animation_lookups = M2Array<int16_t>(f, header.ofsTexAnimLookup, header.nTexAnimLookup);
@@ -703,6 +739,8 @@ void Model::initCommon(const MPQFile& f)
     for (size_t j = 0; j<view->n_texture_unit; j++)
     {
       size_t geoset = texture_unit[j].submesh;
+      if (geoset >= view->n_submesh)
+        throw std::out_of_range ("M2: texture unit refers to a submesh outside the model");
 
       ModelRenderPass pass(texture_unit[j], this);
       pass.ordering_thingy = model_geosets[geoset].BoundingBox[0].x;
@@ -1472,7 +1510,7 @@ void Model::initAnimated(const MPQFile& f)
       // the vanilla sequence is 68 bytes and stores start/end timestamps
       // instead of a duration
       ModelAnimationVanilla const* vanilla_anims
-        = reinterpret_cast<ModelAnimationVanilla const*>(f.getBuffer() + header.ofsAnimations);
+        = f.get_array<ModelAnimationVanilla>(header.ofsAnimations, header.nAnimations);
       for (size_t i = 0; i < header.nAnimations; ++i)
       {
         animations[i].animID = vanilla_anims[i].animID;
@@ -1483,7 +1521,8 @@ void Model::initAnimated(const MPQFile& f)
     }
     else
     {
-      memcpy(animations.data(), f.getBuffer() + header.ofsAnimations, header.nAnimations * sizeof(ModelAnimation));
+      ModelAnimation const* file_anims = f.get_array<ModelAnimation>(header.ofsAnimations, header.nAnimations);
+      memcpy(animations.data(), file_anims, header.nAnimations * sizeof(ModelAnimation));
     }
 
     for (auto& anim : animations)
@@ -1506,7 +1545,7 @@ void Model::initAnimated(const MPQFile& f)
   if (animBones)
   {
     ModelBoneDef const* mb = _vanilla ? _vanilla_bone_defs.data()
-                                      : reinterpret_cast<ModelBoneDef const*>(f.getBuffer() + header.ofsBones);
+                                      : f.get_array<ModelBoneDef>(header.ofsBones, header.nBones);
     for (size_t i = 0; i<header.nBones; ++i)
     {
       bones.emplace_back(f, mb[i], _global_sequences.data(), animation_files);
@@ -1516,7 +1555,7 @@ void Model::initAnimated(const MPQFile& f)
   if (animTextures)
   {
     ModelTexAnimDef const* ta = _vanilla ? _vanilla_texanim_defs.data()
-                                         : reinterpret_cast<ModelTexAnimDef const*>(f.getBuffer() + header.ofsTexAnims);
+                                         : f.get_array<ModelTexAnimDef>(header.ofsTexAnims, header.nTexAnims);
     for (size_t i=0; i<header.nTexAnims; ++i) {
       _texture_animations.emplace_back (f, ta[i], _global_sequences.data());
     }
@@ -1541,7 +1580,7 @@ void Model::initAnimated(const MPQFile& f)
     }
     else
     {
-      ModelParticleEmitterDef const* pdefs = reinterpret_cast<ModelParticleEmitterDef const*>(f.getBuffer() + header.ofsParticleEmitters);
+      ModelParticleEmitterDef const* pdefs = f.get_array<ModelParticleEmitterDef>(header.ofsParticleEmitters, header.nParticleEmitters);
       for (size_t i = 0; i<header.nParticleEmitters; ++i)
       {
         try
@@ -1561,7 +1600,7 @@ void Model::initAnimated(const MPQFile& f)
   // ribbons
   if (header.nRibbonEmitters) {
     ModelRibbonEmitterDef const* rdefs = _vanilla ? _vanilla_ribbon_defs.data()
-                                                  : reinterpret_cast<ModelRibbonEmitterDef const*>(f.getBuffer() + header.ofsRibbonEmitters);
+                                                  : f.get_array<ModelRibbonEmitterDef>(header.ofsRibbonEmitters, header.nRibbonEmitters);
     for (size_t i = 0; i<header.nRibbonEmitters; ++i) {
       _ribbons.emplace_back(this, f, rdefs[i], _global_sequences.data());
     }
@@ -1571,7 +1610,7 @@ void Model::initAnimated(const MPQFile& f)
   // init lights
   if (header.nLights) {
     ModelLightDef const* lDefs = _vanilla ? _vanilla_light_defs.data()
-                                          : reinterpret_cast<ModelLightDef const*>(f.getBuffer() + header.ofsLights);
+                                          : f.get_array<ModelLightDef>(header.ofsLights, header.nLights);
     for (size_t i=0; i<header.nLights; ++i)
       _lights.emplace_back (f, lDefs[i], _global_sequences.data());
   }

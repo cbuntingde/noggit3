@@ -19,6 +19,9 @@ public:
   static AsyncLoader* instance;
 
   static void setup(int threads);
+  //! Stop the loader threads and release the instance. Has to be called
+  //! before the objects the loader works on are destroyed.
+  static void shutdown();
 
   //! Ownership is _not_ transferred. Call ensure_deletable to ensure
   //! that a previously enqueued object can be destroyed.

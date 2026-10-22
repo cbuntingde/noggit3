@@ -218,17 +218,22 @@ namespace Animation
       size_t const timestamp_block_count = _flat_tracks ? 1 : animationBlock.nTimes;
       size_t const key_block_count = _flat_tracks ? 1 : animationBlock.nKeys;
 
-      const AnimationBlockHeader* timestampHeaders = _flat_tracks ? nullptr : file.get<AnimationBlockHeader>(animationBlock.ofsTimes);
-      const AnimationBlockHeader* keyHeaders = _flat_tracks ? nullptr : file.get<AnimationBlockHeader>(animationBlock.ofsKeys);
+      const AnimationBlockHeader* timestampHeaders = _flat_tracks ? nullptr : file.get_array<AnimationBlockHeader>(animationBlock.ofsTimes, animationBlock.nTimes);
+      const AnimationBlockHeader* keyHeaders = _flat_tracks ? nullptr : file.get_array<AnimationBlockHeader>(animationBlock.ofsKeys, animationBlock.nKeys);
 
       for (size_t j = 0; j < timestamp_block_count; ++j)
       {
         size_t const count = _flat_tracks ? animationBlock.nTimes : timestampHeaders[j].nEntries;
         size_t const ofs = _flat_tracks ? animationBlock.ofsTimes : timestampHeaders[j].ofsEntries;
 
-        const TimestampType* timestamps = j < animation_files.size() && animation_files[j] ?
-          animation_files[j]->get<TimestampType>(ofs) :
-          file.get<TimestampType>(ofs);
+        // The whole timestamp array has to fit inside the file. Reading it
+        // element by element from the raw buffer would happily run past the
+        // end of it for a malformed file.
+        std::vector<TimestampType> timestamps (count);
+        if (j < animation_files.size() && animation_files[j])
+          animation_files[j]->read_array<TimestampType>(ofs, count, timestamps.data());
+        else
+          file.read_array<TimestampType>(ofs, count, timestamps.data());
 
         for (size_t i = 0; i < count; ++i)
         {
@@ -241,9 +246,14 @@ namespace Animation
         size_t const count = _flat_tracks ? animationBlock.nKeys : keyHeaders[j].nEntries;
         size_t const ofs = _flat_tracks ? animationBlock.ofsKeys : keyHeaders[j].ofsEntries;
 
-        const DataType* keys = j < animation_files.size() && animation_files[j] ?
-          animation_files[j]->get<DataType>(ofs) :
-          file.get<DataType>(ofs);
+        // hermite tracks store three keys per timestamp
+        size_t const key_count = (_interpolationType == Animation::Interpolation::Type::HERMITE) ? count * 3 : count;
+
+        std::vector<DataType> keys (key_count);
+        if (j < animation_files.size() && animation_files[j])
+          animation_files[j]->read_array<DataType>(ofs, key_count, keys.data());
+        else
+          file.read_array<DataType>(ofs, key_count, keys.data());
 
         switch (_interpolationType)
         {

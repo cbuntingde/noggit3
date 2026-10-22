@@ -5,6 +5,7 @@
 #include <cassert>
 #include <string>
 #include <vector>
+#include <cstring>
 #include <stdexcept>
 
 class DBCFile
@@ -144,6 +145,12 @@ public:
   void require_string_offset(size_t string_offset) const
   {
     if (string_offset >= stringSize || string_offset >= stringTable.size())
+    {
+      throw NotFound();
+    }
+    // the string has to be terminated inside the table, otherwise reading it
+    // as a C string would run past the end of the buffer
+    if (!std::memchr (stringTable.data() + string_offset, '\0', stringSize - string_offset))
     {
       throw NotFound();
     }

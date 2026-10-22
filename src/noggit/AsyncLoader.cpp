@@ -6,14 +6,28 @@
 
 #include <algorithm>
 #include <list>
+#include <memory>
 
 AsyncLoader* AsyncLoader::instance;
+
+namespace
+{
+  //! Owns the loader instance so that it is released exactly once.
+  std::unique_ptr<AsyncLoader> loader_owner;
+}
 
 void AsyncLoader::setup(int threads)
 {
   // make sure there's always at least
   // one thread otherwise nothing can load
-  instance = new AsyncLoader(std::max(1, threads));
+  loader_owner = std::make_unique<AsyncLoader>(std::max(1, threads));
+  instance = loader_owner.get();
+}
+
+void AsyncLoader::shutdown()
+{
+  loader_owner.reset();
+  instance = nullptr;
 }
 
 void AsyncLoader::process()
@@ -163,5 +177,10 @@ AsyncLoader::~AsyncLoader()
   for (auto& thread : _threads)
   {
     thread.join();
+  }
+
+  if (instance == this)
+  {
+    instance = nullptr;
   }
 }

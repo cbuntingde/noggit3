@@ -266,9 +266,10 @@ public:
     {
       throw std::runtime_error ("M2 array has implausible size.");
     }
-    f.require_range(offset, static_cast<size_t>(need));
-    T const* start = reinterpret_cast<T const*>(f.getBuffer() + offset);
-    return std::vector<T>(start, start + count);
+    std::vector<T> result (count);
+    // read through memcpy: the file offset is not necessarily aligned for T
+    f.read_array<T>(offset, count, result.data());
+    return result;
   }
 
   Model(const std::string& name);

@@ -8,6 +8,8 @@
 #include <sol/sol.hpp>
 #include <lodepng.h>
 
+#include <filesystem>
+
 namespace noggit
 {
   namespace scripting
@@ -33,7 +35,10 @@ namespace noggit
     image::image(script_context * ctx, std::string const& path)
     : script_object(ctx)
     {
-      unsigned error = lodepng::decode(_image, _width, _height, path);
+      // the path is script supplied, so it has to go through the script
+      // sandbox just like read_file() does
+      std::filesystem::path const readable (get_readable_path ("img_load_png", ctx, path));
+      unsigned error = lodepng::decode(_image, _width, _height, readable.string());
       if (error)
       {
         throw script_exception(

@@ -18,5 +18,9 @@ namespace noggit
     bool path_exists(script_context * ctx, std::string const& path);
     void register_filesystem(script_context * state);
     void mkdirs(std::string const& path);
+    //! True when `path` resolves to a location inside `root`.
+    bool is_path_within(std::filesystem::path const& path, std::filesystem::path const& root);
+    //! Resolve `path` to a location a script is allowed to read, or throw.
+    std::filesystem::path get_readable_path(std::string const& caller, script_context * state, std::string const& path);
   } // namespace scripting
 } // namespace noggit

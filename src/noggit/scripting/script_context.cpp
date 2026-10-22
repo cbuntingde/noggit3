@@ -3,6 +3,7 @@
 #include <noggit/scripting/scripting_tool.hpp>
 #include <noggit/scripting/script_registry.ipp>
 #include <noggit/scripting/script_exception.hpp>
+#include <noggit/scripting/script_filesystem.hpp>
 #include <noggit/scripting/script_object.hpp>
 
 #include <noggit/MapView.h>
@@ -29,6 +30,16 @@ namespace noggit
     script_context::script_context(scripting_tool * tool): _tool(tool)
     {
       open_libraries(sol::lib::base,sol::lib::table,sol::lib::string);
+
+      // The Lua base library also provides dofile(), loadfile() and load(),
+      // which would let a script read and execute files outside of the
+      // directories the script sandbox allows. Remove them so that the
+      // filesystem access of a script is limited to read_file() and friends.
+      for (auto const* forbidden : {"dofile", "loadfile", "load", "loadstring"})
+      {
+        this->operator[](forbidden) = sol::lua_nil;
+      }
+
       script_scoped_function<std::shared_ptr<script_brush>(std::string const&)>
         add_brush(this,"brush",
         [this](std::string const& name)
@@ -168,7 +179,26 @@ namespace noggit
 
     std::string script_context::module_to_file(std::string const& mod)
     {
-      return (std::filesystem::path("scripts") / std::filesystem::path(mod + ".lua")).string();
+      // A backslash is a path separator on Windows but not on Linux, and a
+      // colon introduces a drive letter there. Reject both, so that a module
+      // name cannot be a traversal on any platform.
+      if (mod.find ('\\') != std::string::npos || mod.find (':') != std::string::npos)
+      {
+        throw script_exception ("require", "module '" + mod + "' is outside of the scripts directory");
+      }
+
+      std::filesystem::path const candidate
+        (std::filesystem::path ("scripts") / std::filesystem::path (mod + ".lua"));
+
+      // A module name is attacker controlled, so it must not be able to point
+      // outside of the scripts directory. Without this check a module name
+      // like "../../foo" would load and execute an arbitrary .lua file.
+      if (!is_path_within (candidate, std::filesystem::path ("scripts")))
+      {
+        throw script_exception ("require", "module '" + mod + "' is outside of the scripts directory");
+      }
+
+      return candidate.string();
     }
 
     void script_context::execute_file(std::string const& file)

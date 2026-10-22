@@ -28,7 +28,10 @@ namespace noggit
       _world->updateTilesModel(&_m2s.at(uid_after), model_update::add);
     }
 
-    return instance.uid;
+    // return the uid the instance is actually stored under: when the
+    // requested uid was taken by a different instance, a new one was
+    // generated and the instance was stored under that one instead
+    return uid_after;
   }
   std::uint32_t world_model_instances_storage::unsafe_add_model_instance_no_world_upd(ModelInstance instance)
   {
@@ -74,7 +77,9 @@ namespace noggit
       _world->updateTilesWMO(&_wmos.at(uid_after), model_update::add);
     }
 
-    return instance.mUniqueID;
+    // see add_model_instance: the effective uid can differ from the requested
+    // one when the instance had to be stored under a newly generated uid
+    return uid_after;
   }
   std::uint32_t world_model_instances_storage::unsafe_add_wmo_instance_no_world_upd(WMOInstance instance)
   {

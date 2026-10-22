@@ -5,6 +5,7 @@
 
 #include <sol/sol.hpp>
 
+#include <filesystem>
 #include <functional>
 #include <map>
 #include <set>
@@ -36,6 +37,10 @@ namespace noggit
       std::string current_script_dir();
       std::string file_to_module(std::string const& file);
       std::string module_to_file(std::string const& module);
+      //! Files the user already allowed this script to write. Kept per script
+      //! context so that consent given to one script is not inherited by
+      //! every other script.
+      std::set<std::filesystem::path> allowed_write_files;
     private:
       scripting_tool * _tool;
       std::vector<std::shared_ptr<script_brush>> _scripts;

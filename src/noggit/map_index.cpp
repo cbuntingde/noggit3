@@ -341,9 +341,29 @@ void MapIndex::reloadTile(const tile_index& tile)
 {
   if (tileLoaded(tile))
   {
-    mTiles[tile.z][tile.x].tile.reset();
+    destroyTile(tile);
     loadTile(tile, true);
   }
+}
+
+void MapIndex::destroyTile(const tile_index& tile)
+{
+  MapTile* adt = mTiles[tile.z][tile.x].tile.get();
+  if (!adt)
+  {
+    return;
+  }
+
+  // The loader thread may still be inside MapTile::finishLoading() for this
+  // tile. It publishes "finished" before it is done with the object, so
+  // destroying the tile here would free memory the worker thread is still
+  // using. Wait until the loader is done with it first.
+  if (AsyncLoader::instance)
+  {
+    AsyncLoader::instance->ensure_deletable(adt);
+  }
+
+  mTiles[tile.z][tile.x].tile.reset();
 }
 
 void MapIndex::unloadTiles(const tile_index& tile)
@@ -373,7 +393,7 @@ void MapIndex::unloadTile(const tile_index& tile)
     // either log before or don't use a reference for the tile/make a copy
     // otherwise it can be deleted before the log because it comes from the adt itself (see unloadTiles)
     NOGGIT_LOG << "Unloading Tile " << tile.x << "-" << tile.z << std::endl;
-    mTiles[tile.z][tile.x].tile.reset();
+    destroyTile(tile);
   }
 }
 

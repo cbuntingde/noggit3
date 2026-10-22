@@ -170,6 +170,8 @@ public:
   void reloadTile(const tile_index& tile);
   void unloadTiles(const tile_index& tile);  // unloads all tiles more then x adts away from given
   void unloadTile(const tile_index& tile);  // unload given tile
+  //! Destroy a tile, waiting for the loader thread to be done with it first.
+  void destroyTile(const tile_index& tile);
   void markOnDisc(const tile_index& tile, bool mto);
   bool isTileExternal(const tile_index& tile) const;
 

@@ -6,6 +6,7 @@
 #include <opengl/shader.hpp>
 
 #include <list>
+#include <stdexcept>
 
 static const unsigned int MAX_PARTICLES = 10000;
 
@@ -48,10 +49,16 @@ ParticleSystem::ParticleSystem(Model* model_, const MPQFile& f, const ModelParti
   , cols (mta.cols)
   , billboard (!(mta.flags & 4096))
   , rem(0)
-  , parent (&model->bones[mta.bone])
+  , parent (nullptr)
   , flags(mta.flags)
   , tofs (misc::frand())
 {
+  // the parent bone is addressed by a file supplied index, so it has to be
+  // validated before it is dereferenced
+  if (mta.bone >= model->bone_count())
+    throw std::logic_error ("particle emitter refers to a bone outside the model");
+  parent = &model->bones[mta.bone];
+
   if (vanilla_params)
   {
     // classic ramps are inline (three BGRA colors and three scales), already
@@ -66,11 +73,20 @@ ParticleSystem::ParticleSystem(Model* model_, const MPQFile& f, const ModelParti
   else
   {
     math::vector_3d colors2[3];
+    int16_t opacity_keys[3];
+    float size_keys[3];
+
+    // all three arrays are addressed by file supplied offsets, so they have to
+    // be checked against the file size before they are read
+    f.require_range(mta.p.colors.ofsKeys, sizeof(math::vector_3d) * 3);
     memcpy(colors2, f.getBuffer() + mta.p.colors.ofsKeys, sizeof(math::vector_3d) * 3);
+    f.read_array<int16_t>(mta.p.opacity.ofsKeys, 3, opacity_keys);
+    f.read_array<float>(mta.p.sizes.ofsKeys, 3, size_keys);
+
     for (size_t i = 0; i<3; ++i) {
-      float opacity = *reinterpret_cast<int16_t const*>(f.getBuffer() + mta.p.opacity.ofsKeys + i * 2);
+      float opacity = opacity_keys[i];
       colors[i] = math::vector_4d(colors2[i].x / 255.0f, colors2[i].y / 255.0f, colors2[i].z / 255.0f, opacity / 32767.0f);
-      sizes[i] = (*reinterpret_cast<float const*>(f.getBuffer() + mta.p.sizes.ofsKeys + i * 4))*mta.p.scales[i];
+      sizes[i] = size_keys[i] * mta.p.scales[i];
     }
   }
 
@@ -784,7 +800,7 @@ RibbonEmitter::RibbonEmitter(Model* model_, const MPQFile &f, ModelRibbonEmitter
   , opacity (mta.opacity, f, globals)
   , above (mta.above, f, globals)
   , below (mta.below, f, globals)
-  , parent (&model->bones[mta.bone])
+  , parent (nullptr)
   , pos (fixCoordSystem(mta.pos))
   , seglen (mta.length)
   , length (mta.res * seglen)
@@ -794,6 +810,12 @@ RibbonEmitter::RibbonEmitter(Model* model_, const MPQFile &f, ModelRibbonEmitter
    // in BFD, res is 60 and len is 0.6, the trails are very short (too long here)
    // in CoT, res and len are like 10 but the trails are supposed to be much longer (too short here)
 {
+  // the parent bone is addressed by a file supplied index, so it has to be
+  // validated before it is dereferenced
+  if (mta.bone >= model->bone_count())
+    throw std::logic_error ("ribbon emitter refers to a bone outside the model");
+  parent = &model->bones[mta.bone];
+
   _texture_ids = Model::M2Array<uint16_t>(f, mta.ofsTextures, mta.nTextures);
   _material_ids = Model::M2Array<uint16_t>(f, mta.ofsMaterials, mta.nMaterials);
 

@@ -324,6 +324,7 @@ liquid_layer& liquid_layer::operator= (liquid_layer&& other)
 
 liquid_layer& liquid_layer::operator=(liquid_layer const& other)
 {
+  _liquid_id = other._liquid_id;
   _liquid_vertex_format = other._liquid_vertex_format;
   _minimum = other._minimum;
   _maximum = other._maximum;
@@ -345,6 +346,7 @@ liquid_layer& liquid_layer::operator=(liquid_layer const& other)
   _indices_by_lod = other._indices_by_lod;
   _indices_count_by_lod = other._indices_count_by_lod;
   _fatigue_enabled = other._fatigue_enabled;
+  _need_data_update = other._need_data_update;
   pos = other.pos;
 
   // update liquid type and vertex format

@@ -294,13 +294,23 @@ Noggit::Noggit(int argc, char *argv[])
 
   NOGGIT_LOG << "Game path: " << wowpath << std::endl;
 
-  std::string project_path = NoggitSettings.value ("project/path", path.absolutePath()).toString().toStdString();
-  NoggitSettings.set_value ("project/path", QString::fromStdString (project_path));
+  // The project path defaults to the WoW installation. A legacy "./" value
+  // means it was never configured, so treat it as unset as well: otherwise
+  // the script sandbox would use the install directory as its root.
+  QString project_path = NoggitSettings.value ("project/path").toString();
+  if (project_path.isEmpty() || project_path == "./")
+  {
+    project_path = path.absolutePath();
+  }
+  if (!project_path.endsWith('/') && !project_path.endsWith('\\'))
+  {
+    project_path += "/";
+  }
+  NoggitSettings.set_value ("project/path", project_path);
 
-  NOGGIT_LOG << "Project path: " << project_path << std::endl;
+  NOGGIT_LOG << "Project path: " << project_path.toStdString() << std::endl;
 
   NoggitSettings.set_value ("project/game_path", path.absolutePath());
-  NoggitSettings.set_value ("project/path", QString::fromStdString(project_path));
 
   // resolve the client profile; detection from the game folder's layout
   // wins, else the stored value, else vanilla (the only supported target)
@@ -609,14 +619,21 @@ int main(int argc, char *argv[])
   qapp.setApplicationName ("Noggit");
   qapp.setOrganizationName ("Noggit");
 
+  int exit_code = 0;
   try
   {
     Noggit app (argc, argv);
 
-    return qapp.exec();
+    exit_code = qapp.exec();
   }
   catch (headless_exit const& headless)
   {
-    return headless.code;
+    exit_code = headless.code;
   }
+
+  // stop the loader threads now that the application is torn down, so that no
+  // thread is still working on objects that are about to be destroyed
+  AsyncLoader::shutdown();
+
+  return exit_code;
 }

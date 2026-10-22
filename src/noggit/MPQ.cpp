@@ -271,7 +271,15 @@ bool MPQFile::existsOnDisk (std::string const& filename)
     return false;
   }
 
-  return std::filesystem::exists (getDiskPath (filename));
+  // normalize and validate, otherwise a name like "../../etc/passwd" would
+  // make this an existence oracle for files outside of the project directory
+  std::string const normalized (noggit::mpq::normalized_filename (filename));
+  if (!noggit::mpq::is_safe_normalized_filename (normalized))
+  {
+    return false;
+  }
+
+  return std::filesystem::exists (getDiskPath (normalized));
 }
 
 size_t MPQFile::read(void* dest, size_t bytes)
